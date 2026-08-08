@@ -1,0 +1,53 @@
+name: sari-ocr
+
+services:
+  ocr-gateway:
+    # PaddlePaddle 3.3.0 publishes the CPU wheel for Linux amd64, not Linux arm64.
+    # Apple Silicon Docker Desktop will run this through its amd64 compatibility layer;
+    # the intended Windows Docker host is normally amd64 and runs it natively.
+    platform: ${OCR_GATEWAY_PLATFORM:-linux/amd64}
+    build:
+      context: ../services/ocr-gateway
+    ports:
+      - "${OCR_GATEWAY_BIND_ADDRESS:-127.0.0.1}:8090:8090"
+    environment:
+      OCR_GATEWAY_PROVIDER: ${OCR_GATEWAY_PROVIDER:-paddleocr}
+      OCR_SERVICE_TOKEN: ${OCR_SERVICE_TOKEN:?Set OCR_SERVICE_TOKEN in the runtime environment}
+      PADDLEOCR_VERSION: ${PADDLEOCR_VERSION:-PP-OCRv4}
+      PADDLEOCR_LANG: ${PADDLEOCR_LANG:-en}
+      PADDLEOCR_DEVICE: ${PADDLEOCR_DEVICE:-cpu}
+      PADDLEOCR_ENGINE: ${PADDLEOCR_ENGINE:-paddle_static}
+      PADDLEOCR_DET_MODEL_NAME: ${PADDLEOCR_DET_MODEL_NAME:-PP-OCRv4_mobile_det}
+      PADDLEOCR_REC_MODEL_NAME: ${PADDLEOCR_REC_MODEL_NAME:-en_PP-OCRv4_mobile_rec}
+      PADDLEOCR_ENABLE_MKLDNN: ${PADDLEOCR_ENABLE_MKLDNN:-false}
+      PADDLEOCR_CPU_THREADS: ${PADDLEOCR_CPU_THREADS:-2}
+      PADDLEOCR_MKLDNN_CACHE_CAPACITY: ${PADDLEOCR_MKLDNN_CACHE_CAPACITY:-10}
+      PADDLEOCR_TEXT_DET_LIMIT_SIDE_LEN: ${PADDLEOCR_TEXT_DET_LIMIT_SIDE_LEN:-1600}
+      PADDLEOCR_TIMEOUT_SECONDS: ${PADDLEOCR_TIMEOUT_SECONDS:-90}
+      PADDLEOCR_WARMUP_TIMEOUT_SECONDS: ${PADDLEOCR_WARMUP_TIMEOUT_SECONDS:-300}
+      PADDLE_OCR_BASE_DIR: /tmp/.paddlex
+      PADDLEOCR_DET_MODEL_DIR: ${PADDLEOCR_DET_MODEL_DIR:-}
+      PADDLEOCR_REC_MODEL_DIR: ${PADDLEOCR_REC_MODEL_DIR:-}
+      PADDLEOCR_DISABLE_MODEL_SOURCE_CHECK: ${PADDLEOCR_DISABLE_MODEL_SOURCE_CHECK:-true}
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=64m
+    volumes:
+      - ocr-models:/tmp/.paddlex
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    mem_limit: 1g
+    cpus: 1.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health/ready', timeout=2)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 300s
+
+volumes:
+  ocr-models:
