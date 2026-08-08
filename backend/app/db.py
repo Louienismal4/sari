@@ -1,4 +1,5 @@
 import os
+import re
 from collections.abc import Generator
 from pathlib import Path
 
@@ -27,7 +28,7 @@ def env_int(name: str, default: int, minimum: int = 0) -> int:
     return value
 
 
-def normalize_database_url(database_url: str) -> str:
+def normalize_database_url(database_url: str, supabase_pooler_host: str | None = None) -> str:
     """Make Supabase's standard Postgres URL explicit for SQLAlchemy's psycopg driver."""
     value = database_url.strip()
     if value.startswith(("https://", "http://")):
@@ -36,9 +37,19 @@ def normalize_database_url(database_url: str) -> str:
             "not the project's HTTPS API URL."
         )
     if value.startswith("postgres://"):
-        return "postgresql+psycopg://" + value.removeprefix("postgres://")
+        value = "postgresql+psycopg://" + value.removeprefix("postgres://")
     if value.startswith("postgresql://"):
-        return "postgresql+psycopg://" + value.removeprefix("postgresql://")
+        value = "postgresql+psycopg://" + value.removeprefix("postgresql://")
+    if supabase_pooler_host:
+        host = supabase_pooler_host.strip().lower()
+        if not re.fullmatch(r"[a-z0-9.-]+\.pooler\.supabase\.com", host):
+            raise ValueError("SUPABASE_POOLER_HOST must be a Supabase pooler hostname.")
+        url = make_url(value)
+        direct_match = re.fullmatch(r"db\.([a-z0-9]+)\.supabase\.co", (url.host or "").lower())
+        if direct_match:
+            project_ref = direct_match.group(1)
+            username = f"postgres.{project_ref}" if url.username == "postgres" else url.username
+            value = url.set(host=host, username=username).render_as_string(hide_password=False)
     return value
 
 
@@ -70,7 +81,10 @@ def build_engine(database_url: str):
     return create_engine(url, connect_args=connect_args, **engine_options)
 
 
-DATABASE_URL = normalize_database_url(os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL) or DEFAULT_DATABASE_URL)
+DATABASE_URL = normalize_database_url(
+    os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL) or DEFAULT_DATABASE_URL,
+    os.getenv("SUPABASE_POOLER_HOST"),
+)
 
 engine = build_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)

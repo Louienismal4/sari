@@ -49,8 +49,8 @@ PaddleOCR produces text detections rather than a guaranteed receipt table. The a
 7. Start the gateway:
 
 ```bash
-docker compose -f deploy/ocr.compose.yml up -d --build
-docker compose -f deploy/ocr.compose.yml ps
+docker compose up -d --build --wait
+docker compose ps
 ```
 
 The gateway is intended for a private LAN or VPN, never a public internet port. For remote use, connect the Mac/application host and Windows PC through Tailscale, WireGuard, or an equivalent private network and set `OCR_GATEWAY_URL` to the private hostname.

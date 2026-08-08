@@ -14,6 +14,44 @@ The local default remains mock OCR. Set the application to `OCR_PROVIDER=gateway
 
 ## Run locally
 
+### Start the backend and OCR together
+
+The root [compose.yml](compose.yml) starts both services and automatically loads the
+project-root `.env` file. If `.env` contains `CLOUDFLARE_TUNNEL_TOKEN`, the macOS
+launcher also starts the Cloudflare tunnel. From the project root, run:
+
+```bash
+docker compose up -d --build --wait
+```
+
+On macOS, you can instead double-click `start-sari.command`. It checks that `.env`
+exists and Docker Desktop is running, then builds the services and waits until they
+are healthy. Do not run a separate `docker run cloudflare/cloudflared...` command.
+
+Before enabling the tunnel, rotate any token that has appeared in chat, logs, or
+shell history in Cloudflare Zero Trust, then put only the replacement in `.env`:
+
+```env
+CLOUDFLARE_TUNNEL_TOKEN=your-new-token
+```
+
+The double-click launcher detects it automatically. For terminal startup with the
+tunnel enabled, use:
+
+```bash
+docker compose --profile tunnel up -d --build --wait
+```
+
+The tunnel's existing `http://127.0.0.1:8000` origin works because the Compose
+sidecar shares the backend network namespace; the token stays out of the container
+command line.
+
+To stop both services:
+
+```bash
+docker compose --profile tunnel down
+```
+
 ### Backend
 
 ```bash
@@ -98,7 +136,7 @@ The production layout is a Vercel-hosted Vite frontend with FastAPI and the OCR 
 5. Start FastAPI and PaddleOCR together from the project root:
 
    ```bash
-   docker compose -f deploy/ocr.compose.yml up -d --build
+   docker compose up -d --build --wait
    ```
 
 The backend container reaches the OCR container as `http://ocr-gateway:8090`; the public tunnel should point only to the backend on port `8000`. The device must remain powered and online for the Vercel frontend to reach inventory data. Receipt images remain on the mounted local storage volume.

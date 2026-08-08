@@ -27,6 +27,25 @@ def test_supabase_urls_are_normalized_and_api_urls_are_rejected() -> None:
         normalize_database_url("https://project-ref.supabase.co")
 
 
+def test_direct_supabase_url_can_use_an_ipv4_session_pooler_without_changing_credentials() -> None:
+    normalized = normalize_database_url(
+        "postgresql://postgres:secret@db.projectref.supabase.co:5432/postgres",
+        "aws-0-ap-northeast-1.pooler.supabase.com",
+    )
+    database_engine = build_engine(normalized)
+    try:
+        assert database_engine.url.host == "aws-0-ap-northeast-1.pooler.supabase.com"
+        assert database_engine.url.username == "postgres.projectref"
+        assert database_engine.url.password == "secret"
+    finally:
+        database_engine.dispose()
+    with pytest.raises(ValueError, match="Supabase pooler hostname"):
+        normalize_database_url(
+            "postgresql://postgres:secret@db.projectref.supabase.co:5432/postgres",
+            "example.com",
+        )
+
+
 def test_supabase_engine_requires_ssl_without_connecting() -> None:
     database_engine = build_engine(
         "postgresql://postgres.project:password@aws-0-region.pooler.supabase.com:5432/postgres"

@@ -9,6 +9,7 @@ services:
       - "${BACKEND_BIND_ADDRESS:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in the runtime environment}
+      SUPABASE_POOLER_HOST: ${SUPABASE_POOLER_HOST:-}
       DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
       DB_POOL_TIMEOUT_SECONDS: ${DB_POOL_TIMEOUT_SECONDS:-30}
@@ -79,6 +80,25 @@ services:
       timeout: 5s
       retries: 3
       start_period: 300s
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.7.3
+    profiles: ["tunnel"]
+    # The remotely managed tunnel currently targets 127.0.0.1:8000. Sharing the
+    # backend's network namespace makes that address resolve to FastAPI instead
+    # of the isolated cloudflared container.
+    network_mode: "service:backend"
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    command: tunnel --no-autoupdate run
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   ocr-models:

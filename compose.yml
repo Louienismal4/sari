@@ -1,0 +1,4 @@
+name: sari-ocr
+
+include:
+  - path: deploy/ocr.compose.yml
