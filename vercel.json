@@ -1,0 +1,37 @@
+{
+  "services": {
+    "frontend": {
+      "root": "frontend",
+      "framework": "vite"
+    },
+    "backend": {
+      "root": "backend"
+    },
+    "ocr-gateway": {
+      "root": "services/ocr-gateway"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/ocr-gateway(/.*)?",
+      "destination": {
+        "type": "service",
+        "service": "ocr-gateway"
+      }
+    },
+    {
+      "source": "/api/backend(/.*)?",
+      "destination": {
+        "type": "service",
+        "service": "backend"
+      }
+    },
+    {
+      "source": "/(.*)",
+      "destination": {
+        "type": "service",
+        "service": "frontend"
+      }
+    }
+  ]
+}
