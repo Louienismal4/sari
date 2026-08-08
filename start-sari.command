@@ -40,8 +40,21 @@ fi
 
 compose_args=(up -d --build --wait)
 tunnel_enabled=false
+tunnel_token="$(awk -F= '$1 ~ /^[[:space:]]*CLOUDFLARE_TUNNEL_TOKEN$/ { print substr($0, index($0, "=") + 1) }' .env | tail -n 1)"
+tunnel_token="${tunnel_token%$'\r'}"
+tunnel_token="${tunnel_token#\"}"
+tunnel_token="${tunnel_token%\"}"
+tunnel_token="${tunnel_token#\'}"
+tunnel_token="${tunnel_token%\'}"
 
-if grep -Eq '^[[:space:]]*CLOUDFLARE_TUNNEL_TOKEN=.+$' .env; then
+if [[ -n "$tunnel_token" ]]; then
+  if [[ "$tunnel_token" != eyJ* || ${#tunnel_token} -lt 100 ]]; then
+    echo "Cannot start the Cloudflare tunnel: CLOUDFLARE_TUNNEL_TOKEN is a placeholder or invalid."
+    echo "In Cloudflare, open Networking > Tunnels, select the tunnel, choose Add a replica,"
+    echo "then copy only the long eyJ... token into the project-root .env file."
+    read -r -p "Press Enter to close..."
+    exit 1
+  fi
   compose_args=(--profile tunnel "${compose_args[@]}")
   tunnel_enabled=true
 fi
