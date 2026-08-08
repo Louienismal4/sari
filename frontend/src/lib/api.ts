@@ -9,7 +9,8 @@ import type {
   StockMovementDraft,
 } from "../types";
 
-const API_ROOT = "/api/v1";
+const API_ORIGIN = (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/+$/, "");
+const API_ROOT = `${API_ORIGIN}/api/v1`;
 
 type ValidationIssue = { loc?: Array<string | number>; msg?: string };
 

@@ -1,6 +1,37 @@
 name: sari-ocr
 
 services:
+  backend:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    ports:
+      - "${BACKEND_BIND_ADDRESS:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in the runtime environment}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
+      DB_POOL_TIMEOUT_SECONDS: ${DB_POOL_TIMEOUT_SECONDS:-30}
+      DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-300}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      OCR_PROVIDER: ${OCR_PROVIDER:-gateway}
+      OCR_GATEWAY_URL: http://ocr-gateway:8090
+      OCR_SERVICE_TOKEN: ${OCR_SERVICE_TOKEN:?Set OCR_SERVICE_TOKEN in the runtime environment}
+      OCR_GATEWAY_TIMEOUT_SECONDS: ${OCR_GATEWAY_TIMEOUT_SECONDS:-120}
+      OCR_MAX_ATTEMPTS: ${OCR_MAX_ATTEMPTS:-3}
+    volumes:
+      - ../backend/storage/receipts:/app/backend/storage/receipts
+    depends_on:
+      ocr-gateway:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
   ocr-gateway:
     # PaddlePaddle 3.3.0 publishes the CPU wheel for Linux amd64, not Linux arm64.
     # Apple Silicon Docker Desktop will run this through its amd64 compatibility layer;

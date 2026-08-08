@@ -79,6 +79,30 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173). The Vite dev server proxies `/api` to the FastAPI server at `http://localhost:8000`.
 
+### Host the frontend on Vercel and run the backend locally
+
+The production layout is a Vercel-hosted Vite frontend with FastAPI and the OCR gateway running in Docker on the store device.
+
+1. Create a stable HTTPS tunnel or hostname to `127.0.0.1:8000` (for example, with Cloudflare Tunnel). Do not expose the Docker port directly to the internet.
+2. In the Vercel project, keep the repository root as the project root. The checked-in `vercel.json` builds only `frontend/`.
+3. Add `VITE_API_BASE_URL=https://api.example.com` to the Vercel Production and Preview environments, using the HTTPS backend URL without a trailing slash. Vite exposes this value to the browser, so it must not contain secrets.
+4. Set the backend device's `.env` values:
+
+   ```env
+   DATABASE_URL=your_supabase_postgres_connection_string
+   CORS_ORIGINS=https://your-app.vercel.app
+   OCR_PROVIDER=gateway
+   OCR_SERVICE_TOKEN=your_gateway_token
+   ```
+
+5. Start FastAPI and PaddleOCR together from the project root:
+
+   ```bash
+   docker compose -f deploy/ocr.compose.yml up -d --build
+   ```
+
+The backend container reaches the OCR container as `http://ocr-gateway:8090`; the public tunnel should point only to the backend on port `8000`. The device must remain powered and online for the Vercel frontend to reach inventory data. Receipt images remain on the mounted local storage volume.
+
 Useful checks:
 
 ```bash
