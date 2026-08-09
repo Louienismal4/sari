@@ -10,3 +10,4 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # conftest keeps collection order from ever selecting the Supabase connection.
 os.environ["DATABASE_URL"] = "sqlite:///./test_sari.db"
 os.environ["OCR_PROVIDER"] = "mock"
+os.environ["SEED_SAMPLE_DATA"] = "true"

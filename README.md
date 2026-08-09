@@ -1,185 +1,116 @@
 # Sari-Sari Store Management System
 
-Phase 1 is a small, dependable inventory foundation for a neighborhood store. It currently includes:
+Sari is a local inventory and receipt-management application for a neighborhood store. It includes item catalog management, stock movements, pricing, dashboard metrics, receipt capture, PaddleOCR-assisted receipt review, and confirmation into the inventory ledger.
 
-- item catalog CRUD with categories, purchase/selling units, pack-size conversion, suppliers, archive state, and per-selling-unit pricing;
-- suggested-price calculation with PHP rounding and separate actual selling price;
-- stock-in, stock-out, physical-count adjustment, and movement history;
-- dashboard totals and low-stock attention list;
-- receipt camera preview/capture with compressed-image upload fallback;
-- a private OCR gateway contract with mock mode, local PaddleOCR PP-OCRv4 inference, normalized errors, durable scan attempts, and bounded retry handling;
-- a responsive desktop/mobile UI that keeps manual inventory usable when OCR is offline.
+The complete application now runs on one Windows computer through Docker Desktop:
 
-The local default remains mock OCR. Set the application to `OCR_PROVIDER=gateway` to call the private service in `services/ocr-gateway`; set that service to `OCR_GATEWAY_PROVIDER=paddleocr` on the Windows OCR host. The gateway defaults to CPU-only `PP-OCRv4_mobile_det` plus `en_PP-OCRv4_mobile_rec`; provider credentials never enter the React bundle.
+- React frontend served by NGINX;
+- FastAPI backend;
+- private PaddleOCR service;
+- PostgreSQL database;
+- persistent local volumes for database records, receipt images, and OCR models.
 
-## Run locally
+See [the architecture reference](docs/architecture.md) for the container and data flow.
 
-### Start the backend and OCR together
+## Start on Windows
 
-The root [compose.yml](compose.yml) starts both services and automatically loads the
-project-root `.env` file. If `.env` contains `CLOUDFLARE_TUNNEL_TOKEN`, the macOS
-launcher also starts the Cloudflare tunnel. From the project root, run:
+### Requirements
 
-```bash
+1. Windows 10/11 with WSL 2 enabled.
+2. Docker Desktop configured for Linux containers.
+3. At least 4 GB of memory available to Docker Desktop; 6–8 GB is preferable during the first PaddleOCR build and model download.
+
+### First startup
+
+From PowerShell in the project directory:
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+```
+
+Replace both password/token placeholders in `.env` with different long random values, then run:
+
+```powershell
+.\start-sari.cmd
+```
+
+The `.cmd` launcher invokes the checked-in PowerShell startup script with a process-scoped execution-policy bypass. You can also run `.\start-sari.ps1` directly when your PowerShell policy allows local scripts.
+
+Alternatively:
+
+```powershell
 docker compose up -d --build --wait
 ```
 
-On macOS, you can instead double-click `start-sari.command`. It checks that `.env`
-exists and Docker Desktop is running, then builds the services and waits until they
-are healthy. Do not run a separate `docker run cloudflare/cloudflared...` command.
+Open [http://localhost:8080](http://localhost:8080). The first start can take several minutes because the OCR image and model files are large.
 
-Before enabling the tunnel, rotate any token that has appeared in chat, logs, or
-shell history in Cloudflare Zero Trust, then put only the replacement in `.env`:
+### Routine commands
 
-```env
-CLOUDFLARE_TUNNEL_TOKEN=your-new-token
+```powershell
+# Status
+docker compose ps
+
+# Logs
+docker compose logs --tail=100 frontend backend ocr-gateway database
+
+# Stop without deleting data
+docker compose down
+
+# Start again
+docker compose up -d --wait
 ```
 
-The double-click launcher detects it automatically. For terminal startup with the
-tunnel enabled, use:
+Do not add `--volumes` to `docker compose down` during routine use. That option deletes the local PostgreSQL database and the receipt/OCR volumes.
 
-```bash
-docker compose --profile tunnel up -d --build --wait
-```
+## Local ports and storage
 
-The tunnel's existing `http://127.0.0.1:8000` origin works because the Compose
-sidecar shares the backend network namespace; the token stays out of the container
-command line.
+Only the frontend is published to Windows, at `127.0.0.1:8080` by default. NGINX forwards `/api` to the private backend container. Backend port `8000`, OCR port `8090`, and PostgreSQL port `5432` are not exposed to the host.
 
-To stop both services:
+Persistent Docker volumes:
 
-```bash
-docker compose --profile tunnel down
-```
+- `sari-database-data` — all structured application data;
+- `sari-receipt-images` — original receipt image files;
+- `sari-ocr-models` — PaddleOCR model cache.
 
-### Backend
+To permit access from another trusted device on the same LAN, set `APP_BIND_ADDRESS=0.0.0.0`, update `CORS_ORIGINS`, and create a narrowly scoped Windows Firewall rule for `APP_PORT`. Keep the PostgreSQL and OCR ports private.
+
+## Development without the full stack
+
+Backend tests use an isolated SQLite database explicitly; the Docker deployment uses PostgreSQL.
 
 ```bash
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
-```
-
-The API loads the project-root `.env`, starts with the local SQLite database at `backend/sari.db`, and seeds a few sample items on the first run. Set `DATABASE_URL` to a PostgreSQL connection string when moving to Supabase. Standard `postgresql://` and `postgres://` URLs are normalized to the installed `psycopg` driver, Supabase connections require SSL, and the SQLAlchemy pool is configurable with the `DB_POOL_*` variables in `.env.example`.
-
-Do not use `https://PROJECT_REF.supabase.co` as `DATABASE_URL`; that is the Data API URL, not a PostgreSQL connection string.
-
-### Move the local database to Supabase
-
-The repository includes a one-time, non-destructive SQLite-to-Postgres transfer. Stop the backend before starting so it cannot seed or write to the target while the copy is running.
-
-1. In Supabase, open the project's **Connect** panel. Prefer the direct connection for the one-time migration when the machine has IPv6; otherwise use the shared session pooler on port `5432`. For the persistent FastAPI backend, use the direct connection on an IPv6-capable host or the session pooler on IPv4-only hosts. Transaction-pooler URLs on port `6543` are supported, but are intended for temporary/serverless clients.
-2. Put the migration URL in the uncommitted project-root `.env` as `SUPABASE_MIGRATION_DATABASE_URL`. Put the backend runtime URL in `DATABASE_URL`; they may be the same session-pooler URL. Keep the database password out of source control.
-3. Check connectivity and source row counts without writing:
-
-   ```bash
-   cd backend
-   .venv/bin/python -m scripts.migrate_sqlite_to_supabase --check-only
-   ```
-
-4. Stop the backend, then run the copy:
-
-   ```bash
-   .venv/bin/python -m scripts.migrate_sqlite_to_supabase
-   ```
-
-   The script validates the SQLite schema without altering it, creates native PostgreSQL UUID/timestamp/numeric columns and required indexes, refuses a non-empty target, copies rows in foreign-key order, and verifies every target row count inside the same transaction. If you have deliberately confirmed that existing Sari rows should be replaced, rerun with `--replace-target`; the script first saves those rows under `backend/backups/`, then replaces only the eight application tables atomically. It also enables RLS and removes direct `anon`/`authenticated` table grants because this app accesses the database only through FastAPI. Use `--skip-rls-hardening` only if you intentionally plan to expose these tables through Supabase's Data API and will immediately add reviewed policies.
-5. Start the backend with the runtime `DATABASE_URL`, then verify `GET /api/v1/health/ready` and the dashboard. Do not allow the app to write to Supabase until the copy has completed.
-
-This migration moves database rows only. Receipt image files remain under `backend/storage/receipts`; move them to shared storage separately before deploying the backend away from this machine.
-
-Connection modes: [Supabase database connections](https://supabase.com/docs/guides/database/connecting-to-postgres). Import guidance: [Import data into Supabase](https://supabase.com/docs/guides/database/import-data). RLS guidance: [Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security).
-
-### OCR gateway
-
-The gateway is optional for local mock work. To run its contract locally:
-
-```bash
-export OCR_PROVIDER=mock
-export OCR_GATEWAY_PROVIDER=mock
-export OCR_SERVICE_TOKEN=replace-with-a-long-random-token
-PYTHONPATH=services/ocr-gateway uvicorn app.main:app --app-dir services/ocr-gateway --host 127.0.0.1 --port 8090
-```
-
-For the Windows PC topology and the hardened Compose service, see [docs/ocr-gateway.md](docs/ocr-gateway.md) and [services/ocr-gateway/README.md](services/ocr-gateway/README.md).
-
-### Frontend
-
-In another terminal:
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Open [http://localhost:5173](http://localhost:5173). The Vite dev server proxies `/api` to the FastAPI server at `http://localhost:8000`.
-
-### Host the frontend on Vercel and run the backend locally
-
-The production layout is a Vercel-hosted Vite frontend with FastAPI and the OCR gateway running in Docker on the store device.
-
-1. Create a stable HTTPS tunnel or hostname to `127.0.0.1:8000` (for example, with Cloudflare Tunnel). Do not expose the Docker port directly to the internet.
-2. In the Vercel project, keep the repository root as the project root. The checked-in `vercel.json` builds only `frontend/`.
-3. Add `VITE_API_BASE_URL=https://api.example.com` to the Vercel Production and Preview environments, using the HTTPS backend URL without a trailing slash. Vite exposes this value to the browser, so it must not contain secrets.
-4. Set the backend device's `.env` values:
-
-   ```env
-   DATABASE_URL=your_supabase_postgres_connection_string
-   CORS_ORIGINS=https://your-app.vercel.app
-   OCR_PROVIDER=gateway
-   OCR_SERVICE_TOKEN=your_gateway_token
-   ```
-
-5. Start FastAPI and PaddleOCR together from the project root:
-
-   ```bash
-   docker compose up -d --build --wait
-   ```
-
-The backend container reaches the OCR container as `http://ocr-gateway:8090`; the public tunnel should point only to the backend on port `8000`. The device must remain powered and online for the Vercel frontend to reach inventory data. Receipt images remain on the mounted local storage volume.
-
-Useful checks:
-
-```bash
-cd frontend
-npm run build
-
-cd ../backend
+pip install -r requirements-dev.txt
 pytest
 ```
 
+Frontend development:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+The Vite development server proxies `/api` to `http://localhost:8000`. For ordinary use on Windows, run the complete Compose stack instead.
+
 ## API surface
 
-The FastAPI OpenAPI document is available at [http://localhost:8000/docs](http://localhost:8000/docs).
+The backend exposes these routes through `http://localhost:8080/api/v1`:
 
-Core endpoints:
-
-- `GET /api/v1/dashboard`
-- `GET|POST /api/v1/items`
-- `GET|PATCH /api/v1/items/{id}`
-- `POST /api/v1/items/{id}/archive`
-- `GET /api/v1/inventory`
-- `GET /api/v1/items/{id}/movements`
-- `POST /api/v1/stock-movements`
-- `GET /api/v1/ocr/health`
-- `POST /api/v1/receipt-scans`
-- `GET /api/v1/receipt-scans/{id}`
-- `POST /api/v1/receipt-scans/{id}/retry`
-- `PATCH /api/v1/receipt-scans/{id}/lines/{line_id}`
-- `POST /api/v1/receipt-scans/{id}/confirm`
-
-## Phase 1 decisions in this slice
-
-- Currency: PHP, rounded half-up to two decimal places.
-- Stock quantities: decimal-safe; the UI uses step `0.001` so weight-based units remain possible.
-- Item codes: generated as `ITM-000001` when not supplied.
-- Negative stock: rejected for normal stock-out actions.
-- Archive: items are soft-archived and retain their ledger/history.
-- App-to-gateway authentication: rotated service token; user authentication remains deferred to the Phase 1 hardening milestone.
-
-## Design reference
-
-The dashboard visual reference used for the implementation is [docs/design/phase-1-dashboard-concept.png](docs/design/phase-1-dashboard-concept.png).
+- `GET /dashboard`
+- `GET|POST /items`
+- `GET|PATCH /items/{id}`
+- `POST /items/{id}/archive`
+- `GET /inventory`
+- `GET /items/{id}/movements`
+- `POST /stock-movements`
+- `GET /ocr/health`
+- `GET|POST /receipt-scans`
+- `GET|PATCH /receipt-scans/{id}`
+- `POST /receipt-scans/{id}/retry`
+- `PATCH /receipt-scans/{id}/lines/{line_id}`
+- `POST /receipt-scans/{id}/confirm`

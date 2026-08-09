@@ -1,4 +1,172 @@
-name: sari-ocr
+name: sari
 
-include:
-  - path: deploy/ocr.compose.yml
+services:
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8080}:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+        restart: true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 50
+    mem_limit: 128m
+    cpus: 0.5
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--output-document=-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    expose:
+      - "8000"
+    environment:
+      POSTGRES_HOST: database
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-sari}
+      POSTGRES_USER: ${POSTGRES_USER:-sari}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
+      DB_POOL_TIMEOUT_SECONDS: ${DB_POOL_TIMEOUT_SECONDS:-30}
+      DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-300}
+      SEED_SAMPLE_DATA: ${SEED_SAMPLE_DATA:-true}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+      OCR_PROVIDER: gateway
+      OCR_GATEWAY_URL: http://ocr-gateway:8090
+      OCR_SERVICE_TOKEN: ${OCR_SERVICE_TOKEN:?Set OCR_SERVICE_TOKEN in .env}
+      OCR_GATEWAY_TIMEOUT_SECONDS: ${OCR_GATEWAY_TIMEOUT_SECONDS:-120}
+      OCR_MAX_ATTEMPTS: ${OCR_MAX_ATTEMPTS:-3}
+    volumes:
+      - receipt-images:/app/backend/storage/receipts
+    depends_on:
+      database:
+        condition: service_healthy
+        restart: true
+      ocr-gateway:
+        condition: service_healthy
+        restart: true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    mem_limit: 512m
+    cpus: 1.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  ocr-gateway:
+    platform: ${OCR_GATEWAY_PLATFORM:-linux/amd64}
+    build:
+      context: ./services/ocr-gateway
+    expose:
+      - "8090"
+    environment:
+      OCR_GATEWAY_PROVIDER: ${OCR_GATEWAY_PROVIDER:-paddleocr}
+      OCR_SERVICE_TOKEN: ${OCR_SERVICE_TOKEN:?Set OCR_SERVICE_TOKEN in .env}
+      PADDLEOCR_VERSION: ${PADDLEOCR_VERSION:-PP-OCRv4}
+      PADDLEOCR_LANG: ${PADDLEOCR_LANG:-en}
+      PADDLEOCR_DEVICE: ${PADDLEOCR_DEVICE:-cpu}
+      PADDLEOCR_ENGINE: ${PADDLEOCR_ENGINE:-paddle_static}
+      PADDLEOCR_DET_MODEL_NAME: ${PADDLEOCR_DET_MODEL_NAME:-PP-OCRv4_mobile_det}
+      PADDLEOCR_REC_MODEL_NAME: ${PADDLEOCR_REC_MODEL_NAME:-en_PP-OCRv4_mobile_rec}
+      PADDLEOCR_ENABLE_MKLDNN: ${PADDLEOCR_ENABLE_MKLDNN:-false}
+      PADDLEOCR_CPU_THREADS: ${PADDLEOCR_CPU_THREADS:-2}
+      PADDLEOCR_MKLDNN_CACHE_CAPACITY: ${PADDLEOCR_MKLDNN_CACHE_CAPACITY:-10}
+      PADDLEOCR_TEXT_DET_LIMIT_SIDE_LEN: ${PADDLEOCR_TEXT_DET_LIMIT_SIDE_LEN:-1600}
+      PADDLEOCR_TIMEOUT_SECONDS: ${PADDLEOCR_TIMEOUT_SECONDS:-90}
+      PADDLEOCR_WARMUP_TIMEOUT_SECONDS: ${PADDLEOCR_WARMUP_TIMEOUT_SECONDS:-300}
+      PADDLE_OCR_BASE_DIR: /tmp/.paddlex
+      PADDLEOCR_DET_MODEL_DIR: ${PADDLEOCR_DET_MODEL_DIR:-}
+      PADDLEOCR_REC_MODEL_DIR: ${PADDLEOCR_REC_MODEL_DIR:-}
+      PADDLEOCR_DISABLE_MODEL_SOURCE_CHECK: ${PADDLEOCR_DISABLE_MODEL_SOURCE_CHECK:-true}
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=64m
+    volumes:
+      - ocr-models:/tmp/.paddlex
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    mem_limit: 1g
+    cpus: 1.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health/ready', timeout=2)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 300s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  database:
+    image: postgres:18.4-bookworm
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sari}
+      POSTGRES_USER: ${POSTGRES_USER:-sari}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    volumes:
+      - database-data:/var/lib/postgresql
+    shm_size: 128mb
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    mem_limit: 512m
+    cpus: 1.0
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  database-data:
+    name: sari-database-data
+  ocr-models:
+    name: sari-ocr-models
+  receipt-images:
+    name: sari-receipt-images

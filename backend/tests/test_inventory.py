@@ -2,6 +2,7 @@ import os
 
 os.environ["DATABASE_URL"] = "sqlite:///./test_sari.db"
 os.environ["OCR_PROVIDER"] = "mock"
+os.environ["SEED_SAMPLE_DATA"] = "true"
 
 from fastapi.testclient import TestClient
 

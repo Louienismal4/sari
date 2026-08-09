@@ -1,3 +1,5 @@
+import os
+
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
@@ -56,11 +58,17 @@ def add_missing_columns(connection, table_name: str, columns: dict[str, tuple[st
 
 
 def prepare_schema(database_engine: Engine = engine) -> None:
-    """Create the local schema and add safe, additive fields to older Phase 1 databases."""
+    """Create the schema, apply additive changes, and optionally harden Supabase Data API roles."""
     Base.metadata.create_all(bind=database_engine)
     with database_engine.begin() as connection:
         add_missing_columns(connection, "items", _ITEM_COLUMNS)
         connection.execute(text("UPDATE items SET selling_unit_id = unit_id WHERE selling_unit_id IS NULL"))
+        harden_supabase = os.getenv("HARDEN_SUPABASE_DATA_API", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         if connection.dialect.name == "postgresql":
             connection.execute(text("ALTER TABLE items ALTER COLUMN selling_unit_id SET NOT NULL"))
             connection.execute(text("""
@@ -91,3 +99,14 @@ def prepare_schema(database_engine: Engine = engine) -> None:
         add_missing_columns(connection, "stock_movements", _STOCK_MOVEMENT_COLUMNS)
         for statement in _INDEXES:
             connection.execute(text(statement))
+        if connection.dialect.name == "postgresql" and harden_supabase:
+            table_names = tuple(Base.metadata.tables)
+            available_roles = set(
+                connection.scalars(
+                    text("SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated')")
+                ).all()
+            )
+            for table_name in table_names:
+                connection.execute(text(f'ALTER TABLE public."{table_name}" ENABLE ROW LEVEL SECURITY'))
+                for role in sorted(available_roles):
+                    connection.execute(text(f'REVOKE ALL ON TABLE public."{table_name}" FROM {role}'))

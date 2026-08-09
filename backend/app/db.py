@@ -5,11 +5,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 
-DEFAULT_DATABASE_URL = "sqlite:///./sari.db"
 PROJECT_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 load_dotenv(PROJECT_ENV_FILE, override=False)
@@ -29,12 +28,11 @@ def env_int(name: str, default: int, minimum: int = 0) -> int:
 
 
 def normalize_database_url(database_url: str, supabase_pooler_host: str | None = None) -> str:
-    """Make Supabase's standard Postgres URL explicit for SQLAlchemy's psycopg driver."""
+    """Make standard Postgres URLs explicit for SQLAlchemy's psycopg driver."""
     value = database_url.strip()
     if value.startswith(("https://", "http://")):
         raise ValueError(
-            "DATABASE_URL must be a PostgreSQL connection string from Supabase's Connect panel, "
-            "not the project's HTTPS API URL."
+            "DATABASE_URL must be a PostgreSQL connection string, not an HTTP URL."
         )
     if value.startswith("postgres://"):
         value = "postgresql+psycopg://" + value.removeprefix("postgres://")
@@ -51,6 +49,30 @@ def normalize_database_url(database_url: str, supabase_pooler_host: str | None =
             username = f"postgres.{project_ref}" if url.username == "postgres" else url.username
             value = url.set(host=host, username=username).render_as_string(hide_password=False)
     return value
+
+
+def database_url_from_env() -> str:
+    explicit_url = os.getenv("DATABASE_URL", "").strip()
+    if explicit_url:
+        return normalize_database_url(explicit_url, os.getenv("SUPABASE_POOLER_HOST"))
+
+    host = os.getenv("POSTGRES_HOST", "").strip()
+    username = os.getenv("POSTGRES_USER", "").strip()
+    password = os.getenv("POSTGRES_PASSWORD", "")
+    database = os.getenv("POSTGRES_DB", "").strip()
+    if not all((host, username, password, database)):
+        raise RuntimeError(
+            "Set DATABASE_URL or all of POSTGRES_HOST, POSTGRES_USER, POSTGRES_PASSWORD, and POSTGRES_DB."
+        )
+    port = env_int("POSTGRES_PORT", 5432, minimum=1)
+    return URL.create(
+        "postgresql+psycopg",
+        username=username,
+        password=password,
+        host=host,
+        port=port,
+        database=database,
+    ).render_as_string(hide_password=False)
 
 
 def build_engine(database_url: str):
@@ -81,10 +103,7 @@ def build_engine(database_url: str):
     return create_engine(url, connect_args=connect_args, **engine_options)
 
 
-DATABASE_URL = normalize_database_url(
-    os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL) or DEFAULT_DATABASE_URL,
-    os.getenv("SUPABASE_POOLER_HOST"),
-)
+DATABASE_URL = database_url_from_env()
 
 engine = build_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)

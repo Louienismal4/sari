@@ -14,11 +14,12 @@ frontend/dist/
 models/
 services/ocr-gateway/models/
 .env
-!.env.example
 .env.example
+!/.env.example
 .DS_Store
 *.md
 plugins
 .agents
 .codex
 !README.md
+!docs/architecture.md

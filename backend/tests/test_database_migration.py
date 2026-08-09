@@ -2,9 +2,10 @@ from hashlib import sha256
 
 import pytest
 from sqlalchemy import inspect
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
-from app.db import Base, build_engine, normalize_database_url
+from app.db import Base, build_engine, database_url_from_env, normalize_database_url
 from app.models import Category, Item, StockMovement, Unit
 from app.schema_migrations import prepare_schema
 from scripts.migrate_sqlite_to_supabase import (
@@ -23,8 +24,24 @@ def test_supabase_urls_are_normalized_and_api_urls_are_rejected() -> None:
     assert normalize_database_url("postgresql://user:pass@example.com:5432/postgres") == (
         "postgresql+psycopg://user:pass@example.com:5432/postgres"
     )
-    with pytest.raises(ValueError, match="HTTPS API URL"):
+    with pytest.raises(ValueError, match="HTTP URL"):
         normalize_database_url("https://project-ref.supabase.co")
+
+
+def test_local_postgres_url_is_built_from_individual_environment_values(monkeypatch) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("POSTGRES_HOST", "database")
+    monkeypatch.setenv("POSTGRES_PORT", "5432")
+    monkeypatch.setenv("POSTGRES_USER", "sari")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "a password/with symbols")
+    monkeypatch.setenv("POSTGRES_DB", "sari")
+
+    local_url = make_url(database_url_from_env())
+
+    assert local_url.drivername == "postgresql+psycopg"
+    assert local_url.host == "database"
+    assert local_url.username == "sari"
+    assert local_url.password == "a password/with symbols"
 
 
 def test_direct_supabase_url_can_use_an_ipv4_session_pooler_without_changing_credentials() -> None:

@@ -38,21 +38,20 @@ Install the gateway dependencies in a clean virtual environment, then start it w
 
 PaddleOCR produces text detections rather than a guaranteed receipt table. The adapter groups detections into rows and only creates a draft line when it can infer name, quantity, unit cost, and line total. Ambiguous text stays in `raw_result` and the review screen remains the source of truth.
 
-## Windows PC deployment
+## Docker deployment
 
 1. Install Docker Desktop with Linux containers.
 2. Copy the repository and create an uncommitted runtime `.env` file.
 3. Set `OCR_GATEWAY_PLATFORM=linux/amd64`. This runs natively on the usual x64 Windows Docker host; Docker Desktop uses amd64 emulation when building from an Apple Silicon Mac.
-4. Set `OCR_GATEWAY_BIND_ADDRESS` to the Windows PC LAN address only when the application host is allowed through the Windows firewall. Keep `127.0.0.1` when the API runs on the same machine.
-5. Set a rotated random `OCR_SERVICE_TOKEN` and `OCR_GATEWAY_PROVIDER=paddleocr`.
-6. Keep the CPU/mobile model defaults unless a representative receipt test justifies changing them. If model weights are preloaded, mount them into the container and set the two model directory variables to the mounted read-only paths.
-7. Start the gateway:
+4. Set a rotated random `OCR_SERVICE_TOKEN` and `OCR_GATEWAY_PROVIDER=paddleocr`.
+5. Keep the CPU/mobile model defaults unless a representative receipt test justifies changing them. If model weights are preloaded, mount them into the container and set the two model directory variables to the mounted read-only paths.
+6. Start the backend and gateway:
 
 ```bash
 docker compose up -d --build --wait
 docker compose ps
 ```
 
-The gateway is intended for a private LAN or VPN, never a public internet port. For remote use, connect the Mac/application host and Windows PC through Tailscale, WireGuard, or an equivalent private network and set `OCR_GATEWAY_URL` to the private hostname.
+Compose exposes the gateway only to the backend over its private Docker network. Never publish or route the OCR port to the internet.
 
 The container runs as a non-root user, has a read-only root filesystem, drops Linux capabilities, limits CPU/memory/processes, and exposes only the authenticated OCR endpoint. Model weights are not bundled into the repository or returned to callers.

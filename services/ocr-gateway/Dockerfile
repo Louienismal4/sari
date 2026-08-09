@@ -1,6 +1,6 @@
 # Pin this to a patch-level base image in CI, then promote the resolved digest
 # to the deployment environment. The service must never build from `latest`.
-FROM python:3.13.7-slim-bookworm
+FROM python:3.13.14-slim-bookworm
 
 LABEL org.opencontainers.image.title="Sari-Sari OCR Gateway" \
       org.opencontainers.image.description="Private receipt OCR gateway" \

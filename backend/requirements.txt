@@ -5,5 +5,4 @@ sqlalchemy>=2.0,<3
 psycopg[binary]>=3.2,<4
 python-dotenv>=1.0,<2
 python-multipart>=0.0.20,<1
-pytest>=8.3,<9
 httpx>=0.28,<1

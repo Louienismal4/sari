@@ -35,7 +35,8 @@ async def lifespan(_: FastAPI):
     RECEIPT_STORAGE.mkdir(parents=True, exist_ok=True)
     db = next(get_db())
     try:
-        seed_database(db)
+        if os.getenv("SEED_SAMPLE_DATA", "false").strip().lower() in {"1", "true", "yes", "on"}:
+            seed_database(db)
     finally:
         db.close()
     yield
@@ -44,7 +45,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="Sari-Sari Store Inventory API",
     version="0.1.0",
-    description="Inventory and receipt review API for Phase 1.",
+    description="Inventory, receipt review, local PostgreSQL persistence, and private OCR orchestration.",
     lifespan=lifespan,
 )
 
@@ -460,7 +461,7 @@ async def create_receipt_scan(file: UploadFile | None = File(default=None), db: 
         data = await file.read(MAX_RECEIPT_BYTES + 1)
         if len(data) > MAX_RECEIPT_BYTES:
             raise HTTPException(status_code=413, detail="Receipt image must be 10 MB or smaller")
-        suffix = Path(original_filename).suffix.lower() or ".jpg"
+        suffix = {"image/png": ".png", "image/webp": ".webp"}.get(file.content_type, ".jpg")
         safe_name = f"{uuid.uuid4().hex}{suffix}"
         destination = RECEIPT_STORAGE / safe_name
         destination.write_bytes(data)

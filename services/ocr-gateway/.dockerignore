@@ -1,9 +1,11 @@
 .git
 .env
 .env.*
+.venv
 __pycache__
-*.py[cod]
 .pytest_cache
-models
 tests
-README.md
+models
+*.pyc
+*.log
+.DS_Store
