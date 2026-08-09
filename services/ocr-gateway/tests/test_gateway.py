@@ -156,3 +156,95 @@ def test_paddle_two_line_receipt_items_are_parsed_without_date_false_positive() 
         ("Watermelon Apple 50", Decimal("1.000"), Decimal("390.00"), Decimal("390.00")),
         ("Crunch Choco Malt 35", Decimal("1.000"), Decimal("680.00"), Decimal("680.00")),
     ]
+
+
+def test_paddle_at_sign_receipt_with_wrapped_names_and_implicit_single_items() -> None:
+    """A receipt need not have a product code or an ``x`` quantity marker.
+
+    This fixture also includes text from a shorter, secondary receipt on the
+    left of the photo. Only the long primary receipt should become draft lines.
+    """
+
+    detections = [
+        # Secondary receipt visible in the background.
+        ("Lucky Me Inst Ndl 9 10.17 91.50", 20, 70, 340),
+        ("Spicy Beef 10 10.75 107.50", 20, 100, 340),
+        ("Chilimansi 20 15.00 300.00", 20, 130, 340),
+        # Primary receipt.
+        ("BASTI'S VARIETY STORE", 455, 20, 750),
+        ("Item", 430, 50, 520),
+        ("Amount", 690, 50, 790),
+        ("DM Four Season", 430, 80, 650),
+        ("124.00", 700, 80, 790),
+        ("4 @ 33.00", 450, 105, 590),
+        ("Less 2", 450, 130, 540),
+        ("Alaska Evaporada", 430, 165, 650),
+        ("108.00", 700, 165, 790),
+        ("360ml", 430, 190, 520),
+        ("3 @ 36.00", 450, 215, 590),
+        ("Alaska Evaporada", 430, 250, 650),
+        ("78.00", 710, 250, 790),
+        ("140ml", 430, 275, 520),
+        ("4 @ 19.50", 450, 300, 590),
+        ("Argentina Corned", 430, 335, 650),
+        ("240.00", 700, 335, 790),
+        ("Beef 260g", 430, 360, 560),
+        ("4 @ 60.00", 450, 385, 590),
+        ("Ufc Gldn Esta Oil", 430, 420, 650),
+        ("275.00", 700, 420, 790),
+        ("Cnola Pet 2/1I-P", 430, 445, 630),
+        ("Century Tuna", 430, 480, 610),
+        ("86.40", 710, 480, 790),
+        ("Flakes H&S 95g", 430, 505, 620),
+        ("3 @ 28.80", 450, 530, 590),
+        ("Argentina Corned", 430, 565, 650),
+        ("219.00", 700, 565, 790),
+        ("Beef 150g", 430, 590, 560),
+        ("6 @ 36.50", 450, 615, 590),
+        ("Total", 430, 655, 530),
+        ("1050.40", 690, 655, 790),
+    ]
+    texts = [text for text, *_ in detections]
+    boxes = [[x1, y, x2, y + 18] for _, x1, y, x2 in detections]
+    result = normalize_paddle_result(
+        [{"res": {"rec_texts": texts, "rec_scores": [0.97] * len(texts), "rec_boxes": boxes}}],
+        filename="long-supplier-receipt.jpg",
+    )
+
+    assert result.merchant_name == "BASTI'S VARIETY STORE"
+    assert result.total == Decimal("1050.40")
+    assert [(line.name, line.quantity, line.unit_cost, line.line_total) for line in result.lines] == [
+        ("DM Four Season", Decimal("4.000"), Decimal("33.00"), Decimal("124.00")),
+        ("Alaska Evaporada 360ml", Decimal("3.000"), Decimal("36.00"), Decimal("108.00")),
+        ("Alaska Evaporada 140ml", Decimal("4.000"), Decimal("19.50"), Decimal("78.00")),
+        ("Argentina Corned Beef 260g", Decimal("4.000"), Decimal("60.00"), Decimal("240.00")),
+        ("Ufc Gldn Esta Oil Cnola Pet 2/1I-P", Decimal("1.000"), Decimal("275.00"), Decimal("275.00")),
+        ("Century Tuna Flakes H&S 95g", Decimal("3.000"), Decimal("28.80"), Decimal("86.40")),
+        ("Argentina Corned Beef 150g", Decimal("6.000"), Decimal("36.50"), Decimal("219.00")),
+    ]
+    assert all("Lucky Me" not in line.name for line in result.lines)
+
+
+def test_numeric_product_description_is_not_mistaken_for_quantity_and_cost() -> None:
+    result = normalize_paddle_result(
+        [
+            {
+                "res": {
+                    "rec_texts": ["Supplier Store", "Knorr 2 in 1 Seasoning 250ml", "104.00", "Total", "104.00"],
+                    "rec_scores": [0.98] * 5,
+                    "rec_boxes": [
+                        [20, 10, 200, 28],
+                        [20, 40, 260, 58],
+                        [300, 40, 370, 58],
+                        [20, 75, 80, 93],
+                        [300, 75, 370, 93],
+                    ],
+                }
+            }
+        ]
+    )
+
+    assert len(result.lines) == 1
+    assert result.lines[0].name == "Knorr 2 in 1 Seasoning 250ml"
+    assert result.lines[0].quantity == Decimal("1.000")
+    assert result.lines[0].unit_cost == Decimal("104.00")

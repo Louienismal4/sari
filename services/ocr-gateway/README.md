@@ -36,7 +36,7 @@ Set `OCR_GATEWAY_PROVIDER=paddleocr` to use the local CPU adapter. The default p
 
 Install the gateway dependencies in a clean virtual environment, then start it with the same `uvicorn` command above. The gateway loads the models and runs a small inference before `/health/ready` succeeds, so the first user receipt does not absorb the cold-start cost. The Compose profile persists downloaded weights in the `ocr-models` volume across container restarts. Set `PADDLEOCR_WARMUP_TIMEOUT_SECONDS` higher than `300` only on especially slow hosts.
 
-PaddleOCR produces text detections rather than a guaranteed receipt table. The adapter groups detections into rows and only creates a draft line when it can infer name, quantity, unit cost, and line total. Ambiguous text stays in `raw_result` and the review screen remains the source of truth.
+PaddleOCR produces text detections rather than a guaranteed receipt table. The application-owned parser supports both single-row item tables and multi-row POS formats, including `2 x 390.00`, `4 @ 33.00`, wrapped product names, and implicit quantity-one items. For photos containing incidental text or a shorter second receipt, it conservatively selects the long primary receipt region before parsing. Ambiguous text stays in `raw_result` and the review screen remains the source of truth.
 
 ## Docker deployment
 

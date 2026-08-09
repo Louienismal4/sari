@@ -253,7 +253,8 @@ def normalize_paddle_result(
 
     mapping = _first_result_mapping(raw_results)
     entries = _paddle_entries(mapping)
-    row_groups = _group_paddle_entry_rows(entries)
+    primary_entries = _select_primary_receipt_entries(entries)
+    row_groups = _group_paddle_entry_rows(primary_entries)
     rows = [(row["text"], row["confidence"]) for row in row_groups]
     parsed_lines, unparsed_rows = _parse_paddle_receipt_rows(row_groups)
 
@@ -268,6 +269,8 @@ def normalize_paddle_result(
         warnings.append("Some OCR rows were not converted into line items; check the source text.")
     if not parsed_lines:
         warnings.append("No structured line items were inferred; review the receipt manually.")
+    if len(primary_entries) < len(entries):
+        warnings.append("More than one text region was detected; only the primary receipt area was parsed.")
 
     text_lines = [
         {
@@ -282,6 +285,7 @@ def normalize_paddle_result(
         "detection_model": detection_model,
         "recognition_model": recognition_model,
         "text_lines": text_lines,
+        "primary_text_line_indexes": [entry["index"] for entry in primary_entries],
         "rows": [text for text, _ in rows],
     }
     return OCRReceiptResult(
@@ -316,6 +320,60 @@ def _paddle_entries(mapping: Mapping[str, Any]) -> list[dict[str, Any]]:
         box = boxes[index] if index < len(boxes) else None
         entries.append({"text": text[:500], "confidence": confidence, "box": box, "index": index})
     return entries
+
+
+def _select_primary_receipt_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Ignore short side receipts or labels beside the main photographed receipt.
+
+    Long receipts usually continue well below incidental text in the scene. The
+    lower portion therefore gives us a conservative horizontal band for the
+    primary paper. We only apply the filter when that band still contains most
+    detections and nearly the full vertical span; otherwise all OCR detections
+    are retained.
+    """
+
+    positioned = [(entry, _box_bounds(entry.get("box"))) for entry in entries]
+    positioned = [(entry, bounds) for entry, bounds in positioned if bounds is not None]
+    if len(positioned) < 10:
+        return entries
+
+    min_y = min(bounds[1] for _, bounds in positioned)
+    max_y = max(bounds[3] for _, bounds in positioned)
+    vertical_span = max_y - min_y
+    if vertical_span < 250:
+        return entries
+
+    tail_start = min_y + vertical_span * 0.60
+    tail_bounds = [bounds for _, bounds in positioned if (bounds[1] + bounds[3]) / 2 >= tail_start]
+    if len(tail_bounds) < 5:
+        return entries
+
+    left = min(bounds[0] for bounds in tail_bounds)
+    right = max(bounds[2] for bounds in tail_bounds)
+    band_width = right - left
+    if band_width <= 0:
+        return entries
+    padding = max(24.0, band_width * 0.20)
+    band_left = left - padding
+    band_right = right + padding
+
+    selected = [
+        entry
+        for entry in entries
+        if (bounds := _box_bounds(entry.get("box"))) is None
+        or (bounds[2] >= band_left and bounds[0] <= band_right)
+    ]
+    selected_bounds = [
+        bounds
+        for entry in selected
+        if (bounds := _box_bounds(entry.get("box"))) is not None
+    ]
+    if len(selected) < max(8, int(len(entries) * 0.55)) or not selected_bounds:
+        return entries
+    selected_span = max(bounds[3] for bounds in selected_bounds) - min(bounds[1] for bounds in selected_bounds)
+    if selected_span < vertical_span * 0.85:
+        return entries
+    return selected
 
 
 def _group_paddle_entries(entries: list[dict[str, Any]]) -> list[tuple[str, Decimal]]:
@@ -381,12 +439,16 @@ def _entry_position(entry: dict[str, Any]) -> tuple[float, float]:
 
 
 _ITEM_HEADER_RE = re.compile(r"^\s*(\d{2,5})\s*(?=[A-Za-z])(.+?)\s*$")
+_SIZE_SUFFIX_RE = re.compile(r"^(?:mcg|mg|kg|ml|cl|dl|g|l|oz|lb|mm|cm|m)\b", re.IGNORECASE)
 _QTY_ROW_RE = re.compile(
-    r"^\s*(\d[\d,]*(?:\.\d+)?)\s*[x×*]\s*(?:PHP|₱|P)?\s*(\d[\d,]*(?:\.\d+)?)\s*$",
+    r"^\s*(?:qty\.?\s*[:=-]?\s*)?(\d[\d,]*(?:\.\d+)?)\s*(?:[x×*@]|at)\s*(?:PHP|₱|P)?\s*(\d[\d,]*(?:\.\d+)?)\s*$",
     re.IGNORECASE,
 )
+_TRAILING_DECIMAL_MONEY_RE = re.compile(r"(?:PHP|₱|P)?\s*(\d[\d,]*\.\d{1,2})\s*$", re.IGNORECASE)
+_TRAILING_CURRENCY_MONEY_RE = re.compile(r"(?:PHP|₱|P)\s*(\d[\d,]*)\s*$", re.IGNORECASE)
+_STANDALONE_MONEY_RE = re.compile(r"^\s*(?:PHP|₱|P)?\s*(\d[\d,]*\.\d{1,2})\s*$", re.IGNORECASE)
 _DATE_LIKE_RE = re.compile(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\b\d{1,2}:\d{2}\b", re.IGNORECASE)
-_METADATA_PREFIX_RE = re.compile(r"^\s*(?:employee|pos|cash|total|subtotal|change|store|invoice|receipt)\b", re.IGNORECASE)
+_METADATA_PREFIX_RE = re.compile(r"^\s*(?:employee|pos|cash|total|subtotal|change|store|invoice|receipt|item|amount)\b", re.IGNORECASE)
 
 
 def _parse_paddle_receipt_rows(rows: list[dict[str, Any]]) -> tuple[list[OCRReceiptLine], list[str]]:
@@ -396,30 +458,50 @@ def _parse_paddle_receipt_rows(rows: list[dict[str, Any]]) -> tuple[list[OCRRece
     while index < len(rows):
         row = rows[index]
         row_text = str(row["text"])
-        item_header = _parse_paddle_item_header(row_text)
+        parsed = _parse_paddle_line(row_text, row["confidence"])
+        if parsed is not None:
+            parsed_lines.append(parsed)
+            index += 1
+            continue
+
+        item_header = _parse_paddle_item_header(row_text, allow_name_only=True)
         if item_header is not None:
-            quantity_index = index + 1
-            continuation: str | None = None
-            if (
-                quantity_index + 1 < len(rows)
-                and _is_numeric_continuation(str(rows[quantity_index]["text"]))
-                and _parse_quantity_row(str(rows[quantity_index + 1]["text"])) is not None
-            ):
-                continuation = str(rows[quantity_index]["text"]).strip()
-                quantity_index += 1
-            quantity_row = _parse_quantity_row(str(rows[quantity_index]["text"])) if quantity_index < len(rows) else None
+            quantity_index: int | None = None
+            quantity_row: tuple[Decimal, Decimal] | None = None
+            line_total = item_header["line_total"]
+            continuations: list[str] = []
+            consumed_indexes = [index]
+            lookahead = index + 1
+            while lookahead < len(rows) and lookahead <= index + 3:
+                next_text = str(rows[lookahead]["text"]).strip()
+                quantity_row = _parse_quantity_row(next_text)
+                if quantity_row is not None:
+                    quantity_index = lookahead
+                    consumed_indexes.append(lookahead)
+                    break
+
+                standalone_amount = _parse_standalone_amount(next_text)
+                if line_total is None and standalone_amount is not None:
+                    line_total = standalone_amount
+                    consumed_indexes.append(lookahead)
+                    lookahead += 1
+                    continue
+
+                if _parse_paddle_item_header(next_text) is not None:
+                    break
+                if len(continuations) < 2 and _is_item_continuation(next_text):
+                    continuations.append(next_text)
+                    consumed_indexes.append(lookahead)
+                    lookahead += 1
+                    continue
+                break
+
             if quantity_row is not None:
                 parsed_quantity, unit_cost = quantity_row
-                name = item_header["name"]
-                if continuation:
-                    name = f"{name} {continuation}"
-                line_total = item_header["line_total"] or _quantized(parsed_quantity * unit_cost, Decimal("0.01"))
-                raw_text = " ".join(
-                    part
-                    for part in (row_text, continuation, str(rows[quantity_index]["text"]))
-                    if part
-                )
-                confidence = _confidence((row["confidence"] + rows[quantity_index]["confidence"]) / Decimal("2"))
+                name = " ".join([item_header["name"], *continuations])
+                line_total = line_total or _quantized(parsed_quantity * unit_cost, Decimal("0.01"))
+                raw_text = " ".join(str(rows[row_index]["text"]) for row_index in consumed_indexes)
+                confidence = _average_row_confidence(rows, consumed_indexes)
                 parsed_lines.append(
                     OCRReceiptLine(
                         raw_text=raw_text[:500],
@@ -430,42 +512,58 @@ def _parse_paddle_receipt_rows(rows: list[dict[str, Any]]) -> tuple[list[OCRRece
                         confidence=confidence,
                     )
                 )
-                index = quantity_index + 1
+                index = (quantity_index or index) + 1
+                continue
+            if line_total is not None:
+                # Many POS systems omit the quantity row when exactly one unit
+                # was purchased. Keep that common format reviewable instead of
+                # dropping the item altogether.
+                name = " ".join([item_header["name"], *continuations])
+                raw_text = " ".join(str(rows[row_index]["text"]) for row_index in consumed_indexes)
+                parsed_lines.append(
+                    OCRReceiptLine(
+                        raw_text=raw_text[:500],
+                        name=name[:160],
+                        quantity=Decimal("1.000"),
+                        unit_cost=line_total,
+                        line_total=line_total,
+                        confidence=_average_row_confidence(rows, consumed_indexes),
+                    )
+                )
+                index = max(consumed_indexes) + 1
                 continue
             if row_text and not _is_metadata_text(row_text):
                 unparsed_rows.append(row_text)
             index += 1
             continue
 
-        parsed = _parse_paddle_line(row_text, row["confidence"])
-        if parsed is None:
-            if row_text and not _is_metadata_text(row_text):
-                unparsed_rows.append(row_text)
-        else:
-            parsed_lines.append(parsed)
+        if row_text and not _is_metadata_text(row_text):
+            unparsed_rows.append(row_text)
         index += 1
     return parsed_lines, unparsed_rows
 
 
-def _parse_paddle_item_header(text: str) -> dict[str, Any] | None:
+def _parse_paddle_item_header(text: str, *, allow_name_only: bool = False) -> dict[str, Any] | None:
     if _is_metadata_text(text) or _parse_quantity_row(text) is not None:
         return None
-    match = _ITEM_HEADER_RE.match(text)
-    if match is None:
-        return None
-    body = match.group(2).strip()
-    matches = list(_NUMBER_RE.finditer(body))
+    body = text.strip()
+    code_match = _ITEM_HEADER_RE.match(body)
+    has_item_code = code_match is not None and _SIZE_SUFFIX_RE.match(code_match.group(2)) is None
+    if has_item_code and code_match is not None:
+        body = code_match.group(2).strip()
+
     line_total: Decimal | None = None
     name = body
-    if matches:
-        last = matches[-1]
-        candidate = _decimal(last.group(1))
-        token = last.group(1)
-        if candidate is not None and ("." in token or len(matches) > 1):
+    money_match = _TRAILING_DECIMAL_MONEY_RE.search(body) or _TRAILING_CURRENCY_MONEY_RE.search(body)
+    if money_match is not None:
+        candidate = _decimal(money_match.group(1))
+        if candidate is not None:
             line_total = _quantized(candidate, Decimal("0.01"))
-            name = body[: last.start()]
+            name = body[: money_match.start()]
     name = re.sub(r"^[\s|:#*.-]+|[\s|:#*.-]+$", "", name).strip()
-    if not name or _is_metadata_text(name):
+    if not name or not re.search(r"[A-Za-z]", name) or _is_metadata_text(name):
+        return None
+    if line_total is None and not has_item_code and not allow_name_only:
         return None
     return {"name": name, "line_total": line_total}
 
@@ -481,8 +579,27 @@ def _parse_quantity_row(text: str) -> tuple[Decimal, Decimal] | None:
     return parsed_quantity, unit_cost
 
 
+def _parse_standalone_amount(text: str) -> Decimal | None:
+    match = _STANDALONE_MONEY_RE.match(text)
+    if match is None:
+        return None
+    return _quantized(_decimal(match.group(1)), Decimal("0.01"))
+
+
 def _is_numeric_continuation(text: str) -> bool:
     return bool(re.fullmatch(r"\s*\d{1,5}(?:\.\d+)?\s*", text))
+
+
+def _is_item_continuation(text: str) -> bool:
+    cleaned = text.strip()
+    if not cleaned or _is_metadata_text(cleaned) or _parse_standalone_amount(cleaned) is not None:
+        return False
+    return bool(re.search(r"[A-Za-z]", cleaned) or _is_numeric_continuation(cleaned))
+
+
+def _average_row_confidence(rows: list[dict[str, Any]], indexes: list[int]) -> Decimal:
+    total = sum((rows[index]["confidence"] for index in indexes), Decimal("0"))
+    return _confidence(total / max(1, len(indexes)))
 
 
 def _is_metadata_text(text: str) -> bool:
@@ -509,6 +626,10 @@ def _parse_paddle_line(text: str, confidence: Decimal) -> OCRReceiptLine | None:
     unit_cost = _quantized(_decimal(selected[1].group(1)), Decimal("0.01"))
     line_total = _quantized(_decimal(selected[2].group(1)), Decimal("0.01"))
     if quantity is None or unit_cost is None or line_total is None or quantity <= 0 or unit_cost < 0 or line_total < 0:
+        return None
+    expected_total = quantity * unit_cost
+    tolerance = max(Decimal("0.05"), abs(line_total) * Decimal("0.02"))
+    if abs(expected_total - line_total) > tolerance:
         return None
     return OCRReceiptLine(
         raw_text=text[:500],
