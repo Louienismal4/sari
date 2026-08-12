@@ -67,6 +67,8 @@ Do not add `--volumes` to `docker compose down` during routine use. That option 
 
 Only the frontend is published to Windows, at `127.0.0.1:8080` by default. NGINX forwards `/api` to the private backend container. Backend port `8000`, OCR port `8090`, and PostgreSQL port `5432` are not exposed to the host.
 
+The Docker deployment always saves application data to its local `database` PostgreSQL container. It deliberately clears any `DATABASE_URL` inherited from a development environment, so a Supabase URL cannot be used by the running stack.
+
 Persistent Docker volumes:
 
 - `sari-database-data` — all structured application data;

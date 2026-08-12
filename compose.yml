@@ -39,6 +39,10 @@ services:
     expose:
       - "8000"
     environment:
+      # The local deployment must always use the private PostgreSQL service
+      # below. An inherited or development-only DATABASE_URL (for example, a
+      # Supabase URL) must never override these local connection settings.
+      DATABASE_URL: ""
       POSTGRES_HOST: database
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB:-sari}

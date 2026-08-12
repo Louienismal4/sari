@@ -29,7 +29,7 @@ def test_supabase_urls_are_normalized_and_api_urls_are_rejected() -> None:
 
 
 def test_local_postgres_url_is_built_from_individual_environment_values(monkeypatch) -> None:
-    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "")
     monkeypatch.setenv("POSTGRES_HOST", "database")
     monkeypatch.setenv("POSTGRES_PORT", "5432")
     monkeypatch.setenv("POSTGRES_USER", "sari")
