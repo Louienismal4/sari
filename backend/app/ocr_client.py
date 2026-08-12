@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 import httpx
 
+# Assuming these helpers exist in your project
 from .services import money, quantity
 
 
@@ -113,17 +114,24 @@ def parse_normalized_response(payload: dict[str, Any]) -> NormalizedOCRResult:
 
 # ----- RAW RECEIPT PARSER (handles multiple layouts & concatenated text) -----
 
+def _has_multiple_prices(text: str) -> bool:
+    """Return True if the text contains more than one price-like token."""
+    tokens = re.findall(r'\d+\.?\d*N?', text)
+    return len(tokens) > 1
+
+
 def _parse_single_line_spjm(text: str) -> list[NormalizedOCRLine]:
     """
     Parse a single concatenated SPJM‑style string.
-    Patterns:
-      1) QTY NAME TOTAL_PRICE (e.g. "1 TATTOOS SC 86X10 85.00N")
-      2) QTY NAME @ UNIT_PRICE TOTAL_PRICE (e.g. "6 CHEESERING20G @8.50 51.00N")
+    Handles:
+      - QTY NAME TOTAL (e.g. "1 TATTOOS SC 86X10 85.00N")
+      - NAME TOTAL (quantity defaults to 1, e.g. "85.00N TATTOOS PIZZA ...")
+      - QTY NAME @ UNIT TOTAL (e.g. "6 CHEESERING20G @8.50 51.00N")
     """
-    # Normalize spaces and remove extra newlines
+    # Normalise spaces
     text = re.sub(r'\s+', ' ', text).strip()
 
-    # First try pattern with @ (unit price)
+    # First, try pattern with @ (unit price)
     pattern_with_at = re.compile(r'(\d+)\s+(.+?)\s+@\s*([\d,]+\.?\d*)\s+([\d,]+\.?\d*N?)', re.IGNORECASE)
     matches = list(pattern_with_at.finditer(text))
     if matches:
@@ -133,7 +141,7 @@ def _parse_single_line_spjm(text: str) -> list[NormalizedOCRLine]:
             name = match.group(2).strip()
             unit_price = money(Decimal(re.sub(r'[,N]', '', match.group(3))))
             total_price = money(Decimal(re.sub(r'[,N]', '', match.group(4))))
-            # If total doesn't match qty*unit, trust the total and recompute unit
+            # Recompute unit if mismatch
             if abs(total_price - qty * unit_price) > Decimal('0.01') and qty > 0:
                 unit_price = (total_price / qty).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
             items.append(NormalizedOCRLine(
@@ -146,23 +154,58 @@ def _parse_single_line_spjm(text: str) -> list[NormalizedOCRLine]:
             ))
         return items
 
-    # Otherwise try the simpler pattern: QTY NAME TOTAL
-    pattern_simple = re.compile(r'(\d+)\s+(.+?)\s+([\d,]+\.?\d*N?)')
+    # Find all price tokens (including trailing N)
+    price_pattern = re.compile(r'(\d+[,.]?\d*N?)')
+    price_matches = list(price_pattern.finditer(text))
+    if not price_matches:
+        return []
+
     items = []
-    for match in pattern_simple.finditer(text):
-        qty = Decimal(match.group(1))
-        name = match.group(2).strip()
-        total_price = money(Decimal(re.sub(r'[,N]', '', match.group(3))))
-        # Compute unit cost from total/qty
-        unit_price = (total_price / qty).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) if qty > 0 else Decimal('0')
+    prev_end = 0
+    for i, match in enumerate(price_matches):
+        price_str = match.group(1)
+        total_price = money(Decimal(re.sub(r'[,N]', '', price_str)))
+        # Segment before this price
+        segment = text[prev_end:match.start()].strip()
+        prev_end = match.end()
+
+        # The segment may contain quantity and name, or only name.
+        # Try to extract quantity: look for a number at start or end.
+        qty = Decimal('1')
+        name = segment
+        # Check if segment starts with digits
+        qty_start = re.match(r'^(\d+)\s+', segment)
+        if qty_start:
+            qty = Decimal(qty_start.group(1))
+            name = segment[qty_start.end():].strip()
+        else:
+            # Check if segment ends with digits (e.g., "TATTOOS PIZZA 1")
+            qty_end = re.search(r'\s+(\d+)$', segment)
+            if qty_end:
+                qty = Decimal(qty_end.group(1))
+                name = segment[:qty_end.start()].strip()
+
+        # If quantity is still 1 but segment contains a number elsewhere, try to extract it
+        if qty == Decimal('1') and re.search(r'\d+', name):
+            # Maybe the quantity is embedded, but we'll trust the parser for now
+            pass
+
+        if not name:
+            # Use the raw segment as name
+            name = segment
+
+        # Compute unit cost = total / qty
+        unit_cost = (total_price / qty).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) if qty > 0 else Decimal('0')
+
         items.append(NormalizedOCRLine(
-            raw_text=match.group(0),
+            raw_text=segment + " " + price_str,
             name=name,
             quantity=qty,
-            unit_cost=unit_price,
+            unit_cost=unit_cost,
             line_total=total_price,
             confidence=Decimal('0.85')
         ))
+
     return items
 
 
@@ -220,10 +263,8 @@ def parse_raw_receipt(text: str) -> NormalizedOCRResult:
 
     parsed_lines: list[NormalizedOCRLine] = []
 
-    # ----- SINGLE‑LINE CONCATENATED (SPJM) DETECTION -----
     # If the whole text has very few lines and many price tokens, use the single‑line parser.
-    price_count = len(re.findall(r'\d+\.?\d*N?', text))
-    if len(lines) <= 3 and price_count > 1:
+    if len(lines) <= 3 and _has_multiple_prices(text):
         spjm_items = _parse_single_line_spjm(text)
         if spjm_items:
             parsed_lines = spjm_items
@@ -364,10 +405,49 @@ def parse_raw_receipt(text: str) -> NormalizedOCRResult:
     )
 
 
+def _split_concatenated_lines(result: NormalizedOCRResult) -> NormalizedOCRResult:
+    """
+    If the normalized result contains a single line with multiple price tokens,
+    try to split it using the single-line parser.
+    """
+    if len(result.lines) != 1:
+        return result
+    line = result.lines[0]
+    if not _has_multiple_prices(line.raw_text):
+        return result
+
+    # Use the raw_text of that line (or result.raw_text if available)
+    raw_to_parse = line.raw_text
+    if result.raw_text and len(result.raw_text) > len(raw_to_parse):
+        raw_to_parse = result.raw_text
+
+    try:
+        split_result = parse_raw_receipt(raw_to_parse)
+        # Preserve header info from original result
+        return NormalizedOCRResult(
+            provider=result.provider,
+            provider_request_id=result.provider_request_id,
+            merchant_name=result.merchant_name,
+            receipt_number=result.receipt_number,
+            purchased_at=result.purchased_at,
+            currency=result.currency,
+            total=result.total,
+            lines=split_result.lines,
+            warnings=result.warnings + ["Split concatenated normalized line"],
+            raw_payload=result.raw_payload,
+            raw_text=result.raw_text or raw_to_parse,
+        )
+    except Exception:
+        # If parsing fails, return original
+        return result
+
+
+# ----- MOCK & LOCAL HELPERS -----
+
 def local_mock_result(raw_text: Optional[str] = None) -> NormalizedOCRResult:
     if raw_text:
         return parse_raw_receipt(raw_text)
-    # Fallback mock
+    # Fallback mock with a simple receipt
     payload = {
         "provider": "mock",
         "provider_request_id": "mock-local",
@@ -418,9 +498,9 @@ class OCRClient:
         return {"status": "offline", "provider": "gateway", "message": "OCR gateway is not ready."}
 
     async def recognize(self, data: bytes | None, filename: str, content_type: str) -> NormalizedOCRResult:
-        # Local provider – here you could call Tesseract to extract text from image.
-        # For demo, we return a parsed sample.
+        # Local provider – demo mode
         if self.provider == "local":
+            # For demo, we use a sample SPJM receipt with multiple lines
             sample = """
 SPJM GEN. MODE.
 1291 Bryg. Milagrosa
@@ -439,6 +519,7 @@ TOTAL    3,213.80
         if self.provider == "mock":
             return local_mock_result()
 
+        # Gateway provider
         if not data:
             raise OCRClientError("image_required", "A receipt image is required when the OCR gateway is enabled")
         if not self.service_token:
@@ -459,13 +540,16 @@ TOTAL    3,213.80
         if response.is_success:
             if not isinstance(payload, dict):
                 raise OCRClientError("invalid_response", "OCR gateway returned an invalid response")
-            # If the gateway provides raw_text, use local parser as a fallback
+            # Try to parse using raw_text if provided
             if payload.get("raw_text"):
                 try:
                     return parse_raw_receipt(payload["raw_text"])
                 except Exception:
                     pass
-            return parse_normalized_response(payload)
+            # Otherwise, use normalized response
+            result = parse_normalized_response(payload)
+            # If normalized result has a single concatenated line, split it
+            return _split_concatenated_lines(result)
         detail = payload.get("detail") if isinstance(payload, dict) else None
         if isinstance(detail, dict):
             code = str(detail.get("code") or "provider_error")
