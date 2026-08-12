@@ -1,8 +1,9 @@
 import os
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 
@@ -40,6 +41,7 @@ class NormalizedOCRResult:
     lines: list[NormalizedOCRLine]
     warnings: list[str]
     raw_payload: dict[str, Any]
+    raw_text: str = ""          # NEW: full raw OCR text
 
 
 def _decimal(value: Any, field: str, *, minimum: Decimal | None = None, maximum: Decimal | None = None) -> Decimal:
@@ -103,10 +105,163 @@ def parse_normalized_response(payload: dict[str, Any]) -> NormalizedOCRResult:
         lines=lines,
         warnings=[str(warning)[:240] for warning in (payload.get("warnings") or []) if str(warning).strip()][:30],
         raw_payload=payload,
+        raw_text=payload.get("raw_text", ""),   # NEW: capture full raw text if present
     )
 
 
-def local_mock_result() -> NormalizedOCRResult:
+# ---------- NEW: Local raw receipt parser ----------
+
+def parse_raw_receipt(text: str) -> NormalizedOCRResult:
+    """
+    Parse raw OCR text from Philippine receipts (Basti's, Besta, SPJM formats).
+    Returns a NormalizedOCRResult with extracted lines.
+    """
+    lines = []
+    merchant = None
+    receipt_no = None
+    purchased_at = None
+    total = None
+
+    # Try to extract header info using regex
+    merchant_match = re.search(r'^(.*?)(?:Order|Receipt|OS#)', text, re.MULTILINE | re.IGNORECASE)
+    if merchant_match:
+        merchant = merchant_match.group(1).strip()
+
+    # Look for receipt number patterns
+    receipt_no_match = re.search(r'(?:Order|OS|Receipt)\s*[#:]\s*([\w\-]+)', text, re.IGNORECASE)
+    if receipt_no_match:
+        receipt_no = receipt_no_match.group(1).strip()
+
+    # Look for date/time
+    date_match = re.search(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s+\d{1,2}:\d{2}\s*(?:AM|PM)?)', text, re.IGNORECASE)
+    if date_match:
+        try:
+            purchased_at = datetime.strptime(date_match.group(1), '%m/%d/%Y %I:%M %p')
+        except ValueError:
+            try:
+                purchased_at = datetime.strptime(date_match.group(1), '%m/%d/%Y %H:%M')
+            except ValueError:
+                pass
+
+    # Look for total
+    total_match = re.search(r'(?:TOTAL|Total)\s*[:]?\s*[₱]?([\d,]+\.?\d*)', text, re.IGNORECASE)
+    if total_match:
+        total = money(Decimal(total_match.group(1).replace(',', '')))
+
+    # Split text into lines and clean
+    raw_lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    # We'll iterate and try to group item lines.
+
+    i = 0
+    while i < len(raw_lines):
+        line = raw_lines[i]
+        # Skip headers/footers
+        if re.search(r'(?:Order|Receipt|Cashier|Date|Total|Change|Item|Amount|OS#|SPJM|Besta)', line, re.IGNORECASE):
+            i += 1
+            continue
+
+        # Attempt to parse different patterns
+
+        # Pattern 1: Besta style: "101 Milky Milk 50    ₱780.00  2 x ₱390.00"
+        besta_match = re.match(r'^(\d+)\s+(.+?)\s+[₱]?([\d,]+\.?\d*)\s+(\d+)\s*x\s*[₱]?([\d,]+\.?\d*)$', line, re.IGNORECASE)
+        if besta_match:
+            code, name, total_str, qty_str, unit_str = besta_match.groups()
+            qty = Decimal(qty_str)
+            unit = money(Decimal(unit_str.replace(',', '')))
+            line_total = money(Decimal(total_str.replace(',', '')))
+            lines.append(NormalizedOCRLine(
+                raw_text=line,
+                name=name.strip(),
+                quantity=qty,
+                unit_cost=unit,
+                line_total=line_total,
+                confidence=Decimal('0.9')
+            ))
+            i += 1
+            continue
+
+        # Pattern 2: SPJM style: "1 TATTOOS SC 86X10    85.00N"
+        spjm_match = re.match(r'^(\d+)\s+(.+?)\s+([\d,]+\.?\d*)(?:N)?$', line, re.IGNORECASE)
+        if spjm_match:
+            qty_str, name, price_str = spjm_match.groups()
+            qty = Decimal(qty_str)
+            unit = money(Decimal(price_str.replace(',', '')))
+            line_total = qty * unit
+            lines.append(NormalizedOCRLine(
+                raw_text=line,
+                name=name.strip(),
+                quantity=qty,
+                unit_cost=unit,
+                line_total=line_total,
+                confidence=Decimal('0.85')
+            ))
+            i += 1
+            continue
+
+        # Pattern 3: Basti's style (multi-line grouping)
+        # First try to see if current line ends with a price, and the next line has quantity info
+        # e.g., "DM Four Season 124.00" then next "4 @ 33.00"
+        price_match = re.search(r'([\d,]+\.?\d*)$', line)
+        if price_match and i + 1 < len(raw_lines):
+            next_line = raw_lines[i+1]
+            qty_info = re.search(r'(\d+)\s*[@x]\s*([\d,]+\.?\d*)', next_line, re.IGNORECASE)
+            if qty_info:
+                qty = Decimal(qty_info.group(1))
+                unit = money(Decimal(qty_info.group(2).replace(',', '')))
+                total_price = money(Decimal(price_match.group(1).replace(',', '')))
+                name = line[:price_match.start()].strip()
+                # Combine raw text
+                combined_raw = line + " " + next_line
+                lines.append(NormalizedOCRLine(
+                    raw_text=combined_raw,
+                    name=name,
+                    quantity=qty,
+                    unit_cost=unit,
+                    line_total=total_price,
+                    confidence=Decimal('0.88')
+                ))
+                i += 2
+                continue
+
+        # If no pattern, treat as a single item with just total? Or skip.
+        # We'll try to extract a price at end and assume quantity=1
+        fallback_price = re.search(r'([\d,]+\.?\d*)$', line)
+        if fallback_price:
+            total_price = money(Decimal(fallback_price.group(1).replace(',', '')))
+            name = line[:fallback_price.start()].strip()
+            lines.append(NormalizedOCRLine(
+                raw_text=line,
+                name=name,
+                quantity=Decimal('1'),
+                unit_cost=total_price,
+                line_total=total_price,
+                confidence=Decimal('0.6')  # low confidence
+            ))
+        i += 1
+
+    # If total not found, sum line totals
+    if total is None and lines:
+        total = sum((l.line_total for l in lines), Decimal('0'))
+
+    return NormalizedOCRResult(
+        provider="local_parser",
+        provider_request_id="local",
+        merchant_name=merchant,
+        receipt_number=receipt_no,
+        purchased_at=purchased_at,
+        currency="PHP",
+        total=total,
+        lines=lines,
+        warnings=["Raw OCR parsing – review each line"],
+        raw_payload={},
+        raw_text=text,
+    )
+
+
+def local_mock_result(raw_text: Optional[str] = None) -> NormalizedOCRResult:
+    if raw_text:
+        return parse_raw_receipt(raw_text)
+    # Fallback mock with a simple receipt
     payload = {
         "provider": "mock",
         "provider_request_id": "mock-local",
@@ -120,6 +275,7 @@ def local_mock_result() -> NormalizedOCRResult:
             {"raw_text": "KOPIKO BROWN 6 12.00 72.00", "name": "Kopiko Brown", "quantity": "6.000", "unit_cost": "12.00", "line_total": "72.00", "confidence": 0.89},
         ],
         "warnings": ["Mock OCR result; review every line before confirmation."],
+        "raw_text": "",  # not used
     }
     return parse_normalized_response(payload)
 
@@ -154,8 +310,27 @@ class OCRClient:
         return {"status": "offline", "provider": "gateway", "message": "OCR gateway is not ready."}
 
     async def recognize(self, data: bytes | None, filename: str, content_type: str) -> NormalizedOCRResult:
-        if self.provider in {"mock", "local"}:
-            return local_mock_result()
+        # If provider is local, we need raw text – but we don't have it (only image bytes).
+        # So we treat "local" as using a mock with a hardcoded sample, or we could
+        # perform OCR locally (not implemented). For now, we'll rely on mock or gateway.
+        if self.provider == "local":
+            # You can pass raw text via environment or a file; here we'll just use a fixed sample.
+            # In practice, you'd want to use a local OCR engine (e.g., Tesseract) to get raw text.
+            # For demo, we use a sample from one of the receipts.
+            sample = """
+BASTI'S VARIETY STORE
+DM Four Season 124.00
+4 @ 33.00
+Alaska Evaporada 360ml 108.00
+3 @ 36.00
+Total 232.00
+"""
+            return parse_raw_receipt(sample)
+
+        # Normal gateway flow
+        if self.provider in {"mock", "mock-gateway"}:
+            return local_mock_result()  # optionally pass raw_text if available
+
         if not data:
             raise OCRClientError("image_required", "A receipt image is required when the OCR gateway is enabled")
         if not self.service_token:
@@ -176,6 +351,13 @@ class OCRClient:
         if response.is_success:
             if not isinstance(payload, dict):
                 raise OCRClientError("invalid_response", "OCR gateway returned an invalid response")
+            # If the gateway returns a raw_text field, we can parse it locally as a fallback
+            if payload.get("raw_text"):
+                try:
+                    return parse_raw_receipt(payload["raw_text"])
+                except Exception:
+                    # Fall back to normalized parsing if available
+                    pass
             return parse_normalized_response(payload)
         detail = payload.get("detail") if isinstance(payload, dict) else None
         if isinstance(detail, dict):
