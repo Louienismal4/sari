@@ -1,12 +1,17 @@
 import os
 import re
+<<<<<<< HEAD
 from dataclasses import dataclass, field
+=======
+from dataclasses import dataclass
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
 import httpx
 
+# Assuming these helpers exist in your project
 from .services import money, quantity
 
 
@@ -43,6 +48,8 @@ class NormalizedOCRResult:
     raw_payload: dict[str, Any]
     raw_text: str = ""          # NEW: full raw OCR text
 
+
+# ----- Helpers for parsing gateway responses -----
 
 def _decimal(value: Any, field: str, *, minimum: Decimal | None = None, maximum: Decimal | None = None) -> Decimal:
     try:
@@ -105,34 +112,77 @@ def parse_normalized_response(payload: dict[str, Any]) -> NormalizedOCRResult:
         lines=lines,
         warnings=[str(warning)[:240] for warning in (payload.get("warnings") or []) if str(warning).strip()][:30],
         raw_payload=payload,
+<<<<<<< HEAD
         raw_text=payload.get("raw_text", ""),   # NEW: capture full raw text if present
     )
 
 
 # ---------- NEW: Local raw receipt parser ----------
+=======
+        raw_text=payload.get("raw_text", ""),
+    )
+
+
+# ----- RAW RECEIPT PARSER (handles multiple layouts) -----
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
 
 def parse_raw_receipt(text: str) -> NormalizedOCRResult:
     """
     Parse raw OCR text from Philippine receipts (Basti's, Besta, SPJM formats).
+<<<<<<< HEAD
     Returns a NormalizedOCRResult with extracted lines.
     """
     lines = []
+=======
+    Handles both multi-line and single-line concatenated text.
+    """
+    # Normalize: keep original line breaks for line-based parsing,
+    # but we also need to handle single-line concatenated text.
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        # If empty, return empty result
+        return NormalizedOCRResult(
+            provider="local_parser",
+            provider_request_id="local",
+            merchant_name=None,
+            receipt_number=None,
+            purchased_at=None,
+            currency="PHP",
+            total=None,
+            lines=[],
+            warnings=["Empty OCR text"],
+            raw_payload={},
+            raw_text=text,
+        )
+
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
     merchant = None
     receipt_no = None
     purchased_at = None
     total = None
 
+<<<<<<< HEAD
     # Try to extract header info using regex
     merchant_match = re.search(r'^(.*?)(?:Order|Receipt|OS#)', text, re.MULTILINE | re.IGNORECASE)
     if merchant_match:
         merchant = merchant_match.group(1).strip()
 
     # Look for receipt number patterns
+=======
+    # Extract header info from the full text
+    merchant_match = re.search(r'^(.*?)(?:Order|Receipt|OS#|SPJM|Besta|BASTI)', text, re.MULTILINE | re.IGNORECASE)
+    if merchant_match:
+        merchant = merchant_match.group(1).strip()
+
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
     receipt_no_match = re.search(r'(?:Order|OS|Receipt)\s*[#:]\s*([\w\-]+)', text, re.IGNORECASE)
     if receipt_no_match:
         receipt_no = receipt_no_match.group(1).strip()
 
+<<<<<<< HEAD
     # Look for date/time
+=======
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
     date_match = re.search(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s+\d{1,2}:\d{2}\s*(?:AM|PM)?)', text, re.IGNORECASE)
     if date_match:
         try:
@@ -143,11 +193,15 @@ def parse_raw_receipt(text: str) -> NormalizedOCRResult:
             except ValueError:
                 pass
 
+<<<<<<< HEAD
     # Look for total
+=======
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
     total_match = re.search(r'(?:TOTAL|Total)\s*[:]?\s*[₱]?([\d,]+\.?\d*)', text, re.IGNORECASE)
     if total_match:
         total = money(Decimal(total_match.group(1).replace(',', '')))
 
+<<<<<<< HEAD
     # Split text into lines and clean
     raw_lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     # We'll iterate and try to group item lines.
@@ -162,6 +216,57 @@ def parse_raw_receipt(text: str) -> NormalizedOCRResult:
 
         # Attempt to parse different patterns
 
+=======
+    parsed_lines: list[NormalizedOCRLine] = []
+
+    # Check if the text is likely a single concatenated line (few lines, no quantity at line start)
+    # If there are many lines, we'll use line-by-line parsing.
+    # Heuristic: if the number of lines is ≤ 3 and none start with a digit + space, treat as single-line.
+    if len(lines) <= 3 and not any(re.match(r'^\d+\s+', ln) for ln in lines):
+        # Use regex to extract all items: QTY NAME PRICE (where price may end with N)
+        pattern = re.compile(r'(\d+)\s+(.+?)\s+(\d+\.?\d*N?)')
+        for match in pattern.finditer(text):
+            qty_str, name, price_str = match.groups()
+            qty = Decimal(qty_str)
+            price = money(Decimal(re.sub(r'[,N]', '', price_str)))  # remove commas and 'N'
+            line_total = qty * price
+            parsed_lines.append(NormalizedOCRLine(
+                raw_text=match.group(0),
+                name=name.strip(),
+                quantity=qty,
+                unit_cost=price,
+                line_total=line_total,
+                confidence=Decimal('0.85')
+            ))
+        # If we found items, use them; otherwise fall back to line-by-line
+        if parsed_lines:
+            if total is None:
+                total = sum((l.line_total for l in parsed_lines), Decimal('0'))
+            return NormalizedOCRResult(
+                provider="local_parser",
+                provider_request_id="local",
+                merchant_name=merchant,
+                receipt_number=receipt_no,
+                purchased_at=purchased_at,
+                currency="PHP",
+                total=total,
+                lines=parsed_lines,
+                warnings=["Raw OCR parsing – review each line"],
+                raw_payload={},
+                raw_text=text,
+            )
+
+    # ---- Line-by-line parsing ----
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        # Skip common header/footer lines
+        if re.search(r'(?:Order|Receipt|Cashier|Date|Total|Change|Item|Amount|OS#|SPJM|Besta|SPJM GEN\.|messenger|CASH|CHANGE|Item\(s\))', line, re.IGNORECASE):
+            i += 1
+            continue
+
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
         # Pattern 1: Besta style: "101 Milky Milk 50    ₱780.00  2 x ₱390.00"
         besta_match = re.match(r'^(\d+)\s+(.+?)\s+[₱]?([\d,]+\.?\d*)\s+(\d+)\s*x\s*[₱]?([\d,]+\.?\d*)$', line, re.IGNORECASE)
         if besta_match:
@@ -169,7 +274,11 @@ def parse_raw_receipt(text: str) -> NormalizedOCRResult:
             qty = Decimal(qty_str)
             unit = money(Decimal(unit_str.replace(',', '')))
             line_total = money(Decimal(total_str.replace(',', '')))
+<<<<<<< HEAD
             lines.append(NormalizedOCRLine(
+=======
+            parsed_lines.append(NormalizedOCRLine(
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
                 raw_text=line,
                 name=name.strip(),
                 quantity=qty,
@@ -180,14 +289,22 @@ def parse_raw_receipt(text: str) -> NormalizedOCRResult:
             i += 1
             continue
 
+<<<<<<< HEAD
         # Pattern 2: SPJM style: "1 TATTOOS SC 86X10    85.00N"
+=======
+        # Pattern 2: SPJM style (single line per item): "1 TATTOOS SC 86X10    85.00N"
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
         spjm_match = re.match(r'^(\d+)\s+(.+?)\s+([\d,]+\.?\d*)(?:N)?$', line, re.IGNORECASE)
         if spjm_match:
             qty_str, name, price_str = spjm_match.groups()
             qty = Decimal(qty_str)
             unit = money(Decimal(price_str.replace(',', '')))
             line_total = qty * unit
+<<<<<<< HEAD
             lines.append(NormalizedOCRLine(
+=======
+            parsed_lines.append(NormalizedOCRLine(
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
                 raw_text=line,
                 name=name.strip(),
                 quantity=qty,
@@ -199,20 +316,32 @@ def parse_raw_receipt(text: str) -> NormalizedOCRResult:
             continue
 
         # Pattern 3: Basti's style (multi-line grouping)
+<<<<<<< HEAD
         # First try to see if current line ends with a price, and the next line has quantity info
         # e.g., "DM Four Season 124.00" then next "4 @ 33.00"
         price_match = re.search(r'([\d,]+\.?\d*)$', line)
         if price_match and i + 1 < len(raw_lines):
             next_line = raw_lines[i+1]
+=======
+        # e.g., "DM Four Season   124.00" then next line "4 @ 33.00"
+        price_match = re.search(r'([\d,]+\.?\d*)$', line)
+        if price_match and i + 1 < len(lines):
+            next_line = lines[i+1]
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
             qty_info = re.search(r'(\d+)\s*[@x]\s*([\d,]+\.?\d*)', next_line, re.IGNORECASE)
             if qty_info:
                 qty = Decimal(qty_info.group(1))
                 unit = money(Decimal(qty_info.group(2).replace(',', '')))
                 total_price = money(Decimal(price_match.group(1).replace(',', '')))
                 name = line[:price_match.start()].strip()
+<<<<<<< HEAD
                 # Combine raw text
                 combined_raw = line + " " + next_line
                 lines.append(NormalizedOCRLine(
+=======
+                combined_raw = line + " " + next_line
+                parsed_lines.append(NormalizedOCRLine(
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
                     raw_text=combined_raw,
                     name=name,
                     quantity=qty,
@@ -223,25 +352,42 @@ def parse_raw_receipt(text: str) -> NormalizedOCRResult:
                 i += 2
                 continue
 
+<<<<<<< HEAD
         # If no pattern, treat as a single item with just total? Or skip.
         # We'll try to extract a price at end and assume quantity=1
+=======
+        # Fallback: treat as single item with price at end, quantity=1
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
         fallback_price = re.search(r'([\d,]+\.?\d*)$', line)
         if fallback_price:
             total_price = money(Decimal(fallback_price.group(1).replace(',', '')))
             name = line[:fallback_price.start()].strip()
+<<<<<<< HEAD
             lines.append(NormalizedOCRLine(
+=======
+            parsed_lines.append(NormalizedOCRLine(
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
                 raw_text=line,
                 name=name,
                 quantity=Decimal('1'),
                 unit_cost=total_price,
                 line_total=total_price,
+<<<<<<< HEAD
                 confidence=Decimal('0.6')  # low confidence
+=======
+                confidence=Decimal('0.6')
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
             ))
         i += 1
 
     # If total not found, sum line totals
+<<<<<<< HEAD
     if total is None and lines:
         total = sum((l.line_total for l in lines), Decimal('0'))
+=======
+    if total is None and parsed_lines:
+        total = sum((l.line_total for l in parsed_lines), Decimal('0'))
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
 
     return NormalizedOCRResult(
         provider="local_parser",
@@ -251,7 +397,11 @@ def parse_raw_receipt(text: str) -> NormalizedOCRResult:
         purchased_at=purchased_at,
         currency="PHP",
         total=total,
+<<<<<<< HEAD
         lines=lines,
+=======
+        lines=parsed_lines,
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
         warnings=["Raw OCR parsing – review each line"],
         raw_payload={},
         raw_text=text,
@@ -259,6 +409,10 @@ def parse_raw_receipt(text: str) -> NormalizedOCRResult:
 
 
 def local_mock_result(raw_text: Optional[str] = None) -> NormalizedOCRResult:
+<<<<<<< HEAD
+=======
+    """Mock OCR result – if raw_text is given, parse it; otherwise return a sample."""
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
     if raw_text:
         return parse_raw_receipt(raw_text)
     # Fallback mock with a simple receipt
@@ -275,10 +429,16 @@ def local_mock_result(raw_text: Optional[str] = None) -> NormalizedOCRResult:
             {"raw_text": "KOPIKO BROWN 6 12.00 72.00", "name": "Kopiko Brown", "quantity": "6.000", "unit_cost": "12.00", "line_total": "72.00", "confidence": 0.89},
         ],
         "warnings": ["Mock OCR result; review every line before confirmation."],
+<<<<<<< HEAD
         "raw_text": "",  # not used
+=======
+        "raw_text": "",
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
     }
     return parse_normalized_response(payload)
 
+
+# ----- OCR CLIENT -----
 
 class OCRClient:
     def __init__(self) -> None:
@@ -310,6 +470,7 @@ class OCRClient:
         return {"status": "offline", "provider": "gateway", "message": "OCR gateway is not ready."}
 
     async def recognize(self, data: bytes | None, filename: str, content_type: str) -> NormalizedOCRResult:
+<<<<<<< HEAD
         # If provider is local, we need raw text – but we don't have it (only image bytes).
         # So we treat "local" as using a mock with a hardcoded sample, or we could
         # perform OCR locally (not implemented). For now, we'll rely on mock or gateway.
@@ -331,6 +492,33 @@ Total 232.00
         if self.provider in {"mock", "mock-gateway"}:
             return local_mock_result()  # optionally pass raw_text if available
 
+=======
+        # Local provider: we cannot OCR images locally, but we can parse raw text if passed.
+        # For simplicity, we'll treat "local" as using a hardcoded sample (or you can use a local OCR engine).
+        if self.provider == "local":
+            # In a real implementation, you might call Tesseract here to get raw text from data.
+            # For demo, we'll use a sample from the SPJM receipt to show multi-item parsing.
+            sample = """
+SPJM GEN. MODE.
+1291 Bryg. Milagrosa
+Carmona, Cavite
+OS#: 0000172372    #: 2
+Date: 08/11/2026 04:05:13 PM
+1 TATTOOS SC 86X10    85.00N
+1 XSALTO SPICY 56X1    85.00N
+1 TATTOOS PIZZA 58X5    85.00N
+1 ASSORTED BIG SNACK  65.00N
+2 DOWEE RED    206.00N
+TOTAL    3,213.80
+"""
+            return parse_raw_receipt(sample)
+
+        # Mock provider (without gateway)
+        if self.provider == "mock":
+            return local_mock_result()  # could also accept raw_text from data? but we don't have it.
+
+        # Gateway provider
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
         if not data:
             raise OCRClientError("image_required", "A receipt image is required when the OCR gateway is enabled")
         if not self.service_token:
@@ -351,12 +539,20 @@ Total 232.00
         if response.is_success:
             if not isinstance(payload, dict):
                 raise OCRClientError("invalid_response", "OCR gateway returned an invalid response")
+<<<<<<< HEAD
             # If the gateway returns a raw_text field, we can parse it locally as a fallback
+=======
+            # If the gateway provides raw_text, use local parser as a fallback or enhancement
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
             if payload.get("raw_text"):
                 try:
                     return parse_raw_receipt(payload["raw_text"])
                 except Exception:
+<<<<<<< HEAD
                     # Fall back to normalized parsing if available
+=======
+                    # fall through to normalized parsing
+>>>>>>> 6184ea5 (feat: Enhance raw receipt parsing for Philippine formats and add support for raw text in OCRClient)
                     pass
             return parse_normalized_response(payload)
         detail = payload.get("detail") if isinstance(payload, dict) else None
