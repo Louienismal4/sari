@@ -7,6 +7,7 @@ from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile, s
 from .contracts import OCRReceiptResult
 from .errors import GatewayError
 from .image_validation import validate_and_normalize
+from .pdf_receipts import extract_pdf_receipt, parse_consolidated_receipt_pdf
 from .providers import build_provider
 
 
@@ -65,6 +66,10 @@ def ready_health() -> dict:
 async def recognize_receipt(file: UploadFile = File(...)) -> dict:
     try:
         data = await file.read(10 * 1024 * 1024 + 1)
+        content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+        if content_type == "application/pdf":
+            document = extract_pdf_receipt(data)
+            return parse_consolidated_receipt_pdf(document, file.filename or "receipt-report.pdf").to_wire()
         image = validate_and_normalize(data, file.content_type)
         provider = build_provider()
         result = await provider.recognize(image.data, image.content_type, file.filename or "receipt.jpg")

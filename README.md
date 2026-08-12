@@ -1,6 +1,6 @@
 # Sari-Sari Store Management System
 
-Sari is a local inventory and receipt-management application for a neighborhood store. It includes item catalog management, stock movements, pricing, dashboard metrics, receipt capture, PaddleOCR-assisted receipt review, and confirmation into the inventory ledger.
+Sari is a local inventory and receipt-management application for a neighborhood store. It includes item catalog management, stock movements, pricing, dashboard metrics, consolidated receipt-PDF imports, receipt review, and confirmation into the inventory ledger.
 
 The complete application now runs on one Windows computer through Docker Desktop:
 
@@ -8,7 +8,7 @@ The complete application now runs on one Windows computer through Docker Desktop
 - FastAPI backend;
 - private PaddleOCR service;
 - PostgreSQL database;
-- persistent local volumes for database records, receipt images, and OCR models.
+- persistent local volumes for database records, receipt PDFs, and OCR models.
 
 See [the architecture reference](docs/architecture.md) for the container and data flow.
 
@@ -70,7 +70,7 @@ Only the frontend is published to Windows, at `127.0.0.1:8080` by default. NGINX
 Persistent Docker volumes:
 
 - `sari-database-data` — all structured application data;
-- `sari-receipt-images` — original receipt image files;
+- `sari-receipt-images` — original consolidated receipt PDF files;
 - `sari-ocr-models` — PaddleOCR model cache.
 
 To permit access from another trusted device on the same LAN, set `APP_BIND_ADDRESS=0.0.0.0`, update `CORS_ORIGINS`, and create a narrowly scoped Windows Firewall rule for `APP_PORT`. Keep the PostgreSQL and OCR ports private.
@@ -96,6 +96,10 @@ npm run dev
 ```
 
 The Vite development server proxies `/api` to `http://localhost:8000`. For ordinary use on Windows, run the complete Compose stack instead.
+
+## Receipt report imports
+
+The receipt workflow accepts a PDF report, not receipt photos. Upload a text-based consolidated line-item PDF containing item description, quantity, unit price, and total amount columns. Each import stays in review until confirmed, so verify the purchase date and all line items before stock is posted. Scanned PDFs without selectable text are rejected.
 
 ## API surface
 

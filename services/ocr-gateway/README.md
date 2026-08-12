@@ -14,12 +14,12 @@ PYTHONPATH=services/ocr-gateway uvicorn app.main:app --app-dir services/ocr-gate
 
 The application API should use `OCR_PROVIDER=gateway` and point `OCR_GATEWAY_URL` at this service when testing the application-to-gateway contract. The gateway itself remains in `OCR_GATEWAY_PROVIDER=mock` mode.
 
-Check readiness and submit a receipt:
+Check readiness and submit a consolidated receipt PDF:
 
 ```bash
 curl http://127.0.0.1:8090/health/ready
 curl -H "X-OCR-Service-Token: $OCR_SERVICE_TOKEN" \
-  -F "file=@receipt.jpg;type=image/jpeg" \
+  -F "file=@Consolidated_Receipts_Line_Items.pdf;type=application/pdf" \
   http://127.0.0.1:8090/v1/ocr/receipts
 ```
 
@@ -36,7 +36,7 @@ Set `OCR_GATEWAY_PROVIDER=paddleocr` to use the local CPU adapter. The default p
 
 Install the gateway dependencies in a clean virtual environment, then start it with the same `uvicorn` command above. The gateway loads the models and runs a small inference before `/health/ready` succeeds, so the first user receipt does not absorb the cold-start cost. The Compose profile persists downloaded weights in the `ocr-models` volume across container restarts. Set `PADDLEOCR_WARMUP_TIMEOUT_SECONDS` higher than `300` only on especially slow hosts.
 
-PaddleOCR produces text detections rather than a guaranteed receipt table. The application-owned parser supports both single-row item tables and multi-row POS formats, including `2 x 390.00`, `4 @ 33.00`, wrapped product names, and implicit quantity-one items. For photos containing incidental text or a shorter second receipt, it conservatively selects the long primary receipt region before parsing. Ambiguous text stays in `raw_result` and the review screen remains the source of truth.
+The receipt workflow accepts a text-based consolidated PDF report. The gateway extracts its selectable table text and imports rows containing an item description, quantity, unit price, and total amount. The source can contain multiple receipts, so the review screen remains the source of truth before stock is posted.
 
 ## Docker deployment
 

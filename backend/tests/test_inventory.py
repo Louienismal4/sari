@@ -130,7 +130,7 @@ def test_stock_ledger_rejects_negative_and_is_idempotent() -> None:
 
 def test_receipt_review_then_confirm_once() -> None:
     with TestClient(app) as client:
-        scan_response = client.post("/api/v1/receipt-scans", files={"file": ("supplier.jpg", b"fake-image", "image/jpeg")})
+        scan_response = client.post("/api/v1/receipt-scans", files={"file": ("supplier.pdf", b"%PDF-1.7\nmock", "application/pdf")})
         assert scan_response.status_code == 201
         scan = scan_response.json()
         assert scan["status"] == "REVIEW"
@@ -160,7 +160,7 @@ def test_receipt_review_then_confirm_once() -> None:
 
 def test_receipt_confirm_creates_an_unmatched_inventory_item() -> None:
     with TestClient(app) as client:
-        scan = client.post("/api/v1/receipt-scans", files={"file": ("new-item.jpg", b"fake-image", "image/jpeg")}).json()
+        scan = client.post("/api/v1/receipt-scans", files={"file": ("new-item.pdf", b"%PDF-1.7\nmock", "application/pdf")}).json()
         catalog = client.get("/api/v1/catalog").json()
         piece = next(row for row in catalog["units"] if row["name"] == "Piece")
         source_line = scan["lines"][0]
@@ -188,7 +188,7 @@ def test_receipt_confirm_creates_an_unmatched_inventory_item() -> None:
 
 def test_receipt_confirm_explains_missing_unit_for_new_item() -> None:
     with TestClient(app) as client:
-        scan = client.post("/api/v1/receipt-scans", files={"file": ("missing-unit.jpg", b"fake-image", "image/jpeg")}).json()
+        scan = client.post("/api/v1/receipt-scans", files={"file": ("missing-unit.pdf", b"%PDF-1.7\nmock", "application/pdf")}).json()
         line = scan["lines"][0]
         updated = client.patch(
             f"/api/v1/receipt-scans/{scan['id']}/lines/{line['id']}",
@@ -212,7 +212,7 @@ def test_receipt_gateway_offline_state_is_saved_and_retry_is_bounded(monkeypatch
     ocr_client.service_token = "test-token"
     try:
         with TestClient(app) as client:
-            first = client.post("/api/v1/receipt-scans", files={"file": ("supplier.jpg", b"fake-image", "image/jpeg")})
+            first = client.post("/api/v1/receipt-scans", files={"file": ("supplier.pdf", b"%PDF-1.7\nmock", "application/pdf")})
             assert first.status_code == 201
             first_scan = first.json()
             assert first_scan["status"] == "WAITING_FOR_SERVICE"

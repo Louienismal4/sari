@@ -47,7 +47,7 @@ export default function App() {
       ? current.map((row) => row.id === scan.id ? scan : row)
       : [scan, ...current]);
   }
-  async function handleCreateScan(file?: File) { const scan = await createReceiptScan(file); upsertScan(scan); return scan; }
+  async function handleCreateScan(file: File) { const scan = await createReceiptScan(file); upsertScan(scan); return scan; }
   async function handleRetryScan(scanId: string) { const scan = await retryReceiptScan(scanId); upsertScan(scan); return scan; }
   async function handleUpdateScan(scanId: string, payload: { purchased_at?: string | null }) { const scan = await updateReceiptScan(scanId, payload); upsertScan(scan); return scan; }
   async function handleUpdateLine(scanId: string, lineId: string, payload: { matched_item_id?: string | null; unit_id?: string | null; quantity?: string; unit_cost?: string; expiry_date?: string | null }) { const scan = await updateReceiptLine(scanId, lineId, payload); upsertScan(scan); return scan; }

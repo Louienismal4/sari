@@ -106,9 +106,9 @@ export async function retryReceiptScan(scanId: string): Promise<ReceiptScan> {
   return request<ReceiptScan>(`/receipt-scans/${scanId}/retry`, { method: "POST" });
 }
 
-export async function createReceiptScan(file?: File): Promise<ReceiptScan> {
+export async function createReceiptScan(file: File): Promise<ReceiptScan> {
   const body = new FormData();
-  if (file) body.append("file", file);
+  body.append("file", file);
   return request<ReceiptScan>("/receipt-scans", { method: "POST", body });
 }
 

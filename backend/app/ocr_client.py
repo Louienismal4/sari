@@ -521,7 +521,7 @@ TOTAL    3,213.80
 
         # Gateway provider
         if not data:
-            raise OCRClientError("image_required", "A receipt image is required when the OCR gateway is enabled")
+            raise OCRClientError("pdf_required", "A receipt PDF is required when the OCR gateway is enabled")
         if not self.service_token:
             raise OCRClientError("service_not_configured", "OCR service token is not configured")
         try:

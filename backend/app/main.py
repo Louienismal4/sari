@@ -25,7 +25,7 @@ from .services import item_payload, markup_from_selling_price, money, movement_p
 ROOT = Path(__file__).resolve().parents[1]
 RECEIPT_STORAGE = ROOT / "storage" / "receipts"
 MAX_RECEIPT_BYTES = 10 * 1024 * 1024
-ALLOWED_RECEIPT_TYPES = {"image/jpeg", "image/png", "image/webp"}
+ALLOWED_RECEIPT_TYPES = {"application/pdf"}
 ocr_client = OCRClient()
 
 
@@ -398,7 +398,7 @@ async def _process_receipt_scan(scan: ReceiptScan, data: bytes | None, db: Sessi
 
 def _content_type_for_filename(filename: str) -> str:
     suffix = Path(filename).suffix.lower()
-    return {".png": "image/png", ".webp": "image/webp"}.get(suffix, "image/jpeg")
+    return "application/pdf" if suffix == ".pdf" else "application/octet-stream"
 
 
 def receipt_payload(scan: ReceiptScan) -> dict:
@@ -452,16 +452,18 @@ def list_receipt_scans(db: Session = Depends(get_db)) -> dict:
 
 @api.post("/receipt-scans", status_code=status.HTTP_201_CREATED)
 async def create_receipt_scan(file: UploadFile | None = File(default=None), db: Session = Depends(get_db)) -> dict:
-    original_filename = file.filename if file and file.filename else "mock-receipt.jpg"
+    original_filename = file.filename if file and file.filename else "consolidated-receipts.pdf"
     image_path = None
     data = None
     if file:
         if file.content_type not in ALLOWED_RECEIPT_TYPES:
-            raise HTTPException(status_code=415, detail="Receipt must be a JPG, PNG, or WEBP image")
+            raise HTTPException(status_code=415, detail="Receipt must be a PDF report")
         data = await file.read(MAX_RECEIPT_BYTES + 1)
         if len(data) > MAX_RECEIPT_BYTES:
-            raise HTTPException(status_code=413, detail="Receipt image must be 10 MB or smaller")
-        suffix = {"image/png": ".png", "image/webp": ".webp"}.get(file.content_type, ".jpg")
+            raise HTTPException(status_code=413, detail="Receipt PDF must be 10 MB or smaller")
+        if not data.startswith(b"%PDF-"):
+            raise HTTPException(status_code=422, detail="Receipt file is not a valid PDF")
+        suffix = ".pdf"
         safe_name = f"{uuid.uuid4().hex}{suffix}"
         destination = RECEIPT_STORAGE / safe_name
         destination.write_bytes(data)

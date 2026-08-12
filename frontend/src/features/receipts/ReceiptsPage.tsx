@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import type { CatalogUnit, Item, OCRHealth, ReceiptScan } from "../../types";
 import { Icon } from "../../components/Icon";
 import { formatDate, formatMoney } from "../../lib/format";
-import { CameraCapture } from "./CameraCapture";
 
 type ReceiptScanUpdate = { purchased_at?: string | null };
 type ReceiptLineUpdate = { matched_item_id?: string | null; unit_id?: string | null; quantity?: string; unit_cost?: string; expiry_date?: string | null };
@@ -13,7 +12,7 @@ interface ReceiptsPageProps {
   items: Item[];
   units: CatalogUnit[];
   ocrHealth: OCRHealth;
-  onCreateScan: (file?: File) => Promise<ReceiptScan>;
+  onCreateScan: (file: File) => Promise<ReceiptScan>;
   onRetryScan: (scanId: string) => Promise<ReceiptScan>;
   onUpdateScan: (scanId: string, payload: ReceiptScanUpdate) => Promise<ReceiptScan>;
   onUpdateLine: (scanId: string, lineId: string, payload: ReceiptLineUpdate) => Promise<ReceiptScan>;
@@ -25,7 +24,6 @@ export function ReceiptsPage({ scans, items, units, ocrHealth, onCreateScan, onR
   const [workflowBusy, setWorkflowBusy] = useState(false);
   const [savingLineId, setSavingLineId] = useState<string | null>(null);
   const [savingScan, setSavingScan] = useState(false);
-  const [cameraOpen, setCameraOpen] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
 
   useEffect(() => {
@@ -38,13 +36,13 @@ export function ReceiptsPage({ scans, items, units, ocrHealth, onCreateScan, onR
     setNotice({ kind: "error", text: error instanceof Error ? error.message : fallback });
   }
 
-  async function create(file?: File) {
+  async function create(file: File) {
     setWorkflowBusy(true); setNotice(null);
     try {
       setActiveScan(await onCreateScan(file));
       setNotice({ kind: "success", text: "Receipt draft ready. Review every line before confirming." });
     } catch (error) {
-      showError(error, "Receipt could not be uploaded. Choose a JPG, PNG, or WEBP image under 10 MB and try again.");
+      showError(error, "Receipt report could not be uploaded. Choose a PDF under 10 MB and try again.");
     } finally { setWorkflowBusy(false); }
   }
 
@@ -95,22 +93,16 @@ export function ReceiptsPage({ scans, items, units, ocrHealth, onCreateScan, onR
     finally { setWorkflowBusy(false); }
   }
 
-  function handleCaptured(file: File) {
-    setCameraOpen(false);
-    void create(file);
-  }
-
   return <div className="receipts-page">
     <section className="page-intro page-intro-compact">
-      <div><h1>Receipts</h1><p>Turn supplier receipts into reviewable stock drafts.</p></div>
+      <div><h1>Receipt reports</h1><p>Turn consolidated receipt PDFs into reviewable stock drafts.</p></div>
       <div className="receipt-capture-actions">
-        <button type="button" className="button button-primary" onClick={() => setCameraOpen(true)} disabled={workflowBusy}><Icon name="camera" size={19} />Use camera</button>
         <FileUploadButton onFile={(file) => void create(file)} disabled={workflowBusy} />
       </div>
     </section>
     <div className="receipt-layout">
       <section className="receipt-workspace">
-        {!activeScan ? <ReceiptStart busy={workflowBusy} onCamera={() => setCameraOpen(true)} onFile={(file) => void create(file)} onSample={() => void create()} /> : <ReceiptReview scan={activeScan} items={items} units={units} busy={workflowBusy} savingLineId={savingLineId} savingScan={savingScan} confirmationBlocker={confirmationBlocker} onInvalid={(text) => setNotice({ kind: "error", text })} onUpdateScan={updateScan} onUpdateLine={updateLine} onRetry={() => void retry(activeScan.id)} onConfirm={confirm} />}
+        {!activeScan ? <ReceiptStart busy={workflowBusy} onFile={(file) => void create(file)} /> : <ReceiptReview scan={activeScan} items={items} units={units} busy={workflowBusy} savingLineId={savingLineId} savingScan={savingScan} confirmationBlocker={confirmationBlocker} onInvalid={(text) => setNotice({ kind: "error", text })} onUpdateScan={updateScan} onUpdateLine={updateLine} onRetry={() => void retry(activeScan.id)} onConfirm={confirm} />}
         {notice ? <div className={`receipt-message receipt-message-${notice.kind}`} role={notice.kind === "error" ? "alert" : "status"}><Icon name={notice.kind === "success" ? "check" : notice.kind === "error" ? "alert" : "refresh"} size={17} />{notice.text}</div> : null}
       </section>
       <aside className="receipt-history">
@@ -119,16 +111,15 @@ export function ReceiptsPage({ scans, items, units, ocrHealth, onCreateScan, onR
         <div className="ocr-note"><span className={`status-dot ${ocrHealth.status === "online" ? "status-dot-online" : "status-dot-offline"}`} /><div><strong>OCR gateway {ocrHealth.status === "online" ? "online" : "offline"}</strong><p>{ocrHealth.provider} · {ocrHealth.message}</p></div></div>
       </aside>
     </div>
-    {cameraOpen ? <CameraCapture onCapture={handleCaptured} onClose={() => setCameraOpen(false)} /> : null}
   </div>;
 }
 
 function FileUploadButton({ onFile, disabled = false }: { onFile: (file: File) => void; disabled?: boolean }) {
-  return <label className={`button button-secondary upload-button ${disabled ? "button-disabled" : ""}`}><Icon name="upload" size={18} />Upload file<input type="file" accept="image/jpeg,image/png,image/webp" disabled={disabled} onChange={(event) => { const file = event.target.files?.[0]; if (file) onFile(file); event.currentTarget.value = ""; }} /></label>;
+  return <label className={`button button-secondary upload-button ${disabled ? "button-disabled" : ""}`}><Icon name="upload" size={18} />Upload PDF<input type="file" accept="application/pdf,.pdf" disabled={disabled} onChange={(event) => { const file = event.target.files?.[0]; if (file) onFile(file); event.currentTarget.value = ""; }} /></label>;
 }
 
-function ReceiptStart({ busy, onCamera, onFile, onSample }: { busy: boolean; onCamera: () => void; onFile: (file: File) => void; onSample: () => void }) {
-  return <div className="receipt-start"><div className="receipt-start-icon"><Icon name="receipt" size={42} /></div><h2>Start with a supplier receipt</h2><p>Use your phone camera or upload an image. OCR only creates a draft—nothing changes in stock until you confirm it.</p><div className="receipt-start-actions"><button type="button" className="button button-primary" onClick={onCamera} disabled={busy}><Icon name="camera" size={18} />Capture receipt</button><FileUploadButton onFile={onFile} disabled={busy} /><button type="button" className="button button-quiet-danger" onClick={onSample} disabled={busy}>Use sample receipt</button></div></div>;
+function ReceiptStart({ busy, onFile }: { busy: boolean; onFile: (file: File) => void }) {
+  return <div className="receipt-start"><div className="receipt-start-icon"><Icon name="receipt" size={42} /></div><h2>Import a consolidated receipt report</h2><p>Upload the PDF export with item, quantity, unit price, and total columns. The import only creates a draft—nothing changes in stock until you confirm it.</p><div className="receipt-start-actions"><FileUploadButton onFile={onFile} disabled={busy} /></div></div>;
 }
 
 function scanStatusLabel(status: ReceiptScan["status"]): string {
@@ -159,12 +150,12 @@ function sanitizeDecimalInput(value: string, maxFractionDigits: number): string 
 }
 
 function getConfirmationBlocker(scan: ReceiptScan | null): string | null {
-  if (!scan) return "Upload or capture a receipt before posting stock.";
+  if (!scan) return "Upload a receipt PDF before posting stock.";
   if (scan.status === "CONFIRMED") return "This receipt has already been posted.";
   if (scan.status === "PROCESSING") return "Wait for OCR to finish before posting stock.";
   if (scan.status === "WAITING_FOR_SERVICE" || scan.status === "FAILED") return "Retry OCR and wait for a review draft before posting stock.";
   if (scan.status !== "REVIEW") return "This receipt is not ready to post yet.";
-  if (!scan.lines.length) return "No receipt lines were detected. Retry OCR with a clearer image before posting stock.";
+  if (!scan.lines.length) return "No receipt lines were detected. Retry the PDF import or use a report with line-item columns.";
   const missingUnits = scan.lines.filter((line) => !line.unit_id).map((line) => line.name);
   if (missingUnits.length) return `Choose a unit for ${missingUnits.join(", ")}. Unmatched lines will be created as new inventory items.`;
   const invalidQuantity = scan.lines.find((line) => !Number.isFinite(Number(line.quantity)) || Number(line.quantity) <= 0);

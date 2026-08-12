@@ -11,6 +11,7 @@ os.environ["OCR_GATEWAY_PROVIDER"] = "mock"
 os.environ["OCR_SERVICE_TOKEN"] = "test-gateway-token"
 
 from app.main import app
+from app.pdf_receipts import ExtractedPDF, parse_consolidated_receipt_pdf
 from app.providers import PaddleOCRProvider, normalize_paddle_result
 
 
@@ -77,6 +78,52 @@ def test_receipt_rejects_invalid_image_bytes() -> None:
         )
         assert response.status_code == 422
         assert response.json()["detail"]["code"] == "invalid_image"
+
+
+def test_consolidated_pdf_result_contains_reviewable_lines() -> None:
+    result = parse_consolidated_receipt_pdf(
+        ExtractedPDF(
+            page_count=1,
+            text="""
+CONSOLIDATED RECEIPTS LINE ITEMS
+SPJM GEN. MDSE.
+Date: 08/11/2026 04:05:13 PM  Cashier: SPJM
+# ITEM DESCRIPTION QTY UNIT PRICE TOTAL AMOUNT
+1 TATTOOS SC 58GX10 1 P85.00 P85.00
+2 ASSORTED BIG SNACK 25 P16.50 P412.50
+""",
+        ),
+        "Consolidated_Receipts_Line_Items.pdf",
+    )
+
+    assert result.provider == "pdf_text"
+    assert result.merchant_name == "Consolidated receipt report"
+    assert result.purchased_at is not None
+    assert result.total == Decimal("497.50")
+    assert [(line.name, line.quantity, line.unit_cost, line.line_total) for line in result.lines] == [
+        ("TATTOOS SC 58GX10", Decimal("1.000"), Decimal("85.00"), Decimal("85.00")),
+        ("ASSORTED BIG SNACK", Decimal("25.000"), Decimal("16.50"), Decimal("412.50")),
+    ]
+
+
+def test_receipt_accepts_a_consolidated_pdf(monkeypatch) -> None:
+    extracted = ExtractedPDF(
+        page_count=1,
+        text="1 TATTOOS SC 58GX10 1 P85.00 P85.00",
+    )
+    monkeypatch.setattr("app.main.extract_pdf_receipt", lambda _: extracted)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/ocr/receipts",
+            headers={"X-OCR-Service-Token": "test-gateway-token"},
+            files={"file": ("Consolidated_Receipts_Line_Items.pdf", b"%PDF-1.7\nmock", "application/pdf")},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider"] == "pdf_text"
+    assert payload["lines"][0]["name"] == "TATTOOS SC 58GX10"
 
 
 def test_paddle_result_is_grouped_into_reviewable_draft_lines() -> None:

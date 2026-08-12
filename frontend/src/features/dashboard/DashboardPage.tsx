@@ -50,7 +50,7 @@ export function DashboardPage({ dashboard, onAddItem, onReceiveStock, onScanRece
           <h2>Quick actions</h2>
           <button type="button" className="quick-action" onClick={onScanReceipt}>
             <span className="quick-action-icon"><Icon name="scan" size={25} /></span>
-            <span>Scan supplier<br />receipt</span>
+            <span>Import receipt<br />PDF</span>
             <Icon name="chevron" size={19} />
           </button>
           <button type="button" className="quick-action" onClick={onAddStock}>
@@ -60,8 +60,8 @@ export function DashboardPage({ dashboard, onAddItem, onReceiveStock, onScanRece
           </button>
           <div className="receipt-empty-state">
             <div className="receipt-empty-icon"><Icon name="receipt" size={34} /></div>
-            <h3>No receipt scanned yet</h3>
-            <p>Scan a supplier receipt to capture items and quantities.</p>
+            <h3>No receipt report imported yet</h3>
+            <p>Import a consolidated receipt PDF to capture items and quantities.</p>
           </div>
           <div className="ocr-status"><span className={`status-dot ${ocr.status === "online" ? "status-dot-online" : "status-dot-offline"}`} />{ocr.provider === "mock" ? "OCR gateway online · mock" : "OCR gateway online"}</div>
         </aside>
@@ -115,4 +115,3 @@ export function MovementList({ movements }: { movements: Movement[] }) {
     </div>
   );
 }
-
